@@ -35,6 +35,8 @@ Controls:
 - Click `x` on the widget to quit.
 - Click `T` to toggle always-on-top mode.
 - Click `r` to refresh live quota data.
+- Drag the dotted handle at the top center to move the widget.
+- Hold `Command` or `Option` and drag anywhere on the widget to move it.
 - Right-click the widget to refresh or quit.
 - Press `Esc` while the widget is focused to quit.
 - The widget redraws countdowns every 30 seconds and checks source-file changes every two minutes.

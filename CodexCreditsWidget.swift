@@ -503,7 +503,7 @@ final class WidgetView: NSView {
     override init(frame frameRect: NSRect) {
         self.creditData = store.load()
         self.sourceSignature = store.sourceSignature()
-        self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? true
+        self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? false
         super.init(frame: frameRect)
         wantsLayer = true
         let refreshTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
@@ -516,7 +516,7 @@ final class WidgetView: NSView {
     required init?(coder: NSCoder) {
         self.creditData = store.load()
         self.sourceSignature = store.sourceSignature()
-        self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? true
+        self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? false
         super.init(coder: coder)
     }
 
@@ -574,6 +574,11 @@ final class WidgetView: NSView {
             return
         }
 
+        if dragHandleRect.contains(point) || event.modifierFlags.contains(.command) || event.modifierFlags.contains(.option) {
+            window?.performDrag(with: event)
+            return
+        }
+
         window?.performDrag(with: event)
     }
 
@@ -605,6 +610,7 @@ final class WidgetView: NSView {
         let screen = caseBounds.insetBy(dx: 7, dy: 7)
         screenRect = screen
         drawLCD(in: screen)
+        drawDragHandle()
         drawWindowButtons()
         drawContent(in: screen.insetBy(dx: 10, dy: 8))
     }
@@ -624,6 +630,11 @@ final class WidgetView: NSView {
         return NSRect(x: screen.maxX - 54, y: screen.maxY - 20, width: 13, height: 13)
     }
 
+    private var dragHandleRect: NSRect {
+        let screen = activeScreenRect
+        return NSRect(x: screen.midX - 18, y: screen.maxY - 20, width: 36, height: 13)
+    }
+
     private var activeScreenRect: NSRect {
         if screenRect == .zero {
             return bounds.insetBy(dx: 14, dy: 14)
@@ -638,6 +649,15 @@ final class WidgetView: NSView {
         drawButton(rect: topButtonRect, label: "^", attrs: buttonAttrs, active: alwaysOnTop)
         drawButton(rect: refreshButtonRect, label: "r", attrs: buttonAttrs)
         drawButton(rect: closeButtonRect, label: "x", attrs: buttonAttrs)
+    }
+
+    private func drawDragHandle() {
+        let rect = dragHandleRect
+        NSColor(calibratedWhite: 0.12, alpha: 0.38).setFill()
+
+        for x in stride(from: rect.minX + 5, through: rect.maxX - 5, by: 7) {
+            NSBezierPath(ovalIn: NSRect(x: x, y: rect.midY - 1.2, width: 2.4, height: 2.4)).fill()
+        }
     }
 
     private func drawButton(rect: NSRect, label: String, attrs: [NSAttributedString.Key: Any], active: Bool = false) {
@@ -785,7 +805,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.isOpaque = false
         window.backgroundColor = .clear
         window.hasShadow = true
-        let alwaysOnTop = UserDefaults.standard.object(forKey: "alwaysOnTop") as? Bool ?? true
+        let alwaysOnTop = UserDefaults.standard.object(forKey: "alwaysOnTop") as? Bool ?? false
         window.level = alwaysOnTop ? .floating : .normal
         window.isMovableByWindowBackground = true
         window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
