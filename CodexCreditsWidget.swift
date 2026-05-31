@@ -720,7 +720,7 @@ private enum WidgetStyle: String, CaseIterable {
         switch self {
         case .native: return NSSize(width: 332, height: 152)
         case .mono: return NSSize(width: 306, height: 132)
-        case .terminal: return NSSize(width: 320, height: 132)
+        case .terminal: return NSSize(width: 320, height: 136)
         }
     }
 }
@@ -860,6 +860,9 @@ final class WidgetView: NSView {
     private var widgetAppearance: WidgetAppearance
     private var screenRect: NSRect = .zero
     private var tooltipTexts: [NSView.ToolTipTag: String] = [:]
+    private var trackingArea: NSTrackingArea?
+    private var hoverHint: String?
+    private var hoverHintRect: NSRect = .zero
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d h:mm a"
@@ -896,6 +899,11 @@ final class WidgetView: NSView {
 
     deinit {
         timer?.invalidate()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
     }
 
     func reload() {
@@ -1070,6 +1078,17 @@ final class WidgetView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
+        if let trackingArea {
+            removeTrackingArea(trackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.activeAlways, .inVisibleRect, .mouseMoved, .mouseEnteredAndExited],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        trackingArea = area
         updateTooltips()
     }
 
@@ -1091,6 +1110,43 @@ final class WidgetView: NSView {
 
     func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         tooltipTexts[tag] ?? ""
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let next = hoverTarget(at: point)
+        if hoverHint != next.text || hoverHintRect != next.rect {
+            hoverHint = next.text
+            hoverHintRect = next.rect
+            needsDisplay = true
+        }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if hoverHint != nil {
+            hoverHint = nil
+            hoverHintRect = .zero
+            needsDisplay = true
+        }
+    }
+
+    private func hoverTarget(at point: NSPoint) -> (text: String?, rect: NSRect) {
+        if styleButtonRect.contains(point) {
+            return ("Switch skin", styleButtonRect)
+        }
+        if appearanceButtonRect.contains(point) {
+            return (widgetAppearance == .dark ? "Light mode" : "Dark mode", appearanceButtonRect)
+        }
+        if topButtonRect.contains(point) {
+            return (alwaysOnTop ? "Unpin window" : "Keep on top", topButtonRect)
+        }
+        if refreshButtonRect.contains(point) {
+            return ("Refresh credits", refreshButtonRect)
+        }
+        if closeButtonRect.contains(point) {
+            return ("Close widget", closeButtonRect)
+        }
+        return (nil, .zero)
     }
 
     private func nextStyleTitle() -> String {
@@ -1136,6 +1192,7 @@ final class WidgetView: NSView {
         case .terminal:
             drawTerminalWidget(in: bounds, tokens: tokens)
         }
+        drawHoverHint(tokens: tokens)
     }
 
     private var closeButtonRect: NSRect {
@@ -1240,11 +1297,11 @@ final class WidgetView: NSView {
         path.stroke()
         drawHeader(in: screenRect, tokens: tokens, titleSize: 11.5, timePrefix: "", terminal: true)
 
-        var y = screenRect.maxY - 26
+        var y = screenRect.maxY - 27
         for (index, service) in creditData.services.enumerated() {
             if index > 0 {
-                drawLine(y: y + 10, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
-                y -= 7
+                drawLine(y: y + 4, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
+                y -= 6
             }
             drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
             y -= 13
@@ -1274,6 +1331,26 @@ final class WidgetView: NSView {
         drawButton(rect: topButtonRect, symbol: alwaysOnTop ? "pin.fill" : "pin", fallback: "^", tokens: tokens, color: alwaysOnTop ? onColor : color, active: alwaysOnTop, terminal: terminal, square: mono)
         drawButton(rect: refreshButtonRect, symbol: "arrow.clockwise", fallback: "R", tokens: tokens, color: color, terminal: terminal, square: mono)
         drawButton(rect: closeButtonRect, symbol: "xmark", fallback: "X", tokens: tokens, color: color, terminal: terminal, square: mono)
+    }
+
+    private func drawHoverHint(tokens: WidgetTokens) {
+        guard let hoverHint else {
+            return
+        }
+
+        let textColor = widgetStyle == .terminal ? tokens.termText : tokens.text
+        let bubbleFill = (widgetAppearance == .light ? NSColor.white : NSColor.black).withAlphaComponent(widgetAppearance == .light ? 0.92 : 0.72)
+        let bubbleStroke = (widgetStyle == .terminal ? tokens.termBorder : tokens.controlBorder).withAlphaComponent(0.75)
+        let hintAttrs = attrs(size: 10, weight: .semibold, color: textColor, mono: widgetStyle != .native)
+        let textSize = hoverHint.size(withAttributes: hintAttrs)
+        let bubbleWidth = textSize.width + 14
+        let bubbleHeight = textSize.height + 8
+        let screen = activeScreenRect
+        let x = min(max(hoverHintRect.midX - bubbleWidth / 2, screen.minX), screen.maxX - bubbleWidth)
+        let y = max(screen.minY + 2, hoverHintRect.minY - bubbleHeight - 5)
+        let bubble = NSRect(x: x, y: y, width: bubbleWidth, height: bubbleHeight)
+        drawRounded(bubble, radius: 6, fill: bubbleFill, stroke: bubbleStroke)
+        drawText(hoverHint, at: NSPoint(x: bubble.minX + 7, y: bubble.minY + 4), attrs: hintAttrs)
     }
 
     private func drawButton(rect: NSRect, symbol: String, fallback: String, tokens: WidgetTokens, color: NSColor, active: Bool = false, terminal: Bool = false, square: Bool = false) {
@@ -1318,19 +1395,19 @@ final class WidgetView: NSView {
 
     private func drawMonoRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
         let labelWidth: CGFloat = 24
-        let barWidth: CGFloat = 114
+        let barWidth: CGFloat = 132
         let barX = rect.minX + labelWidth + 8
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
-        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 18, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track, fontSize: 10.7)
-        drawRight("\(row.percent)", x: barX + barWidth + 25, y: y, width: 24, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
+        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 21, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track, fontSize: 10.7)
+        drawRight("\(row.percent)", x: barX + barWidth + 20, y: y, width: 24, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
         drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: 48, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
 
     private func drawTerminalRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens) {
         let labelWidth: CGFloat = 20
-        let percentWidth: CGFloat = 34
+        let percentWidth: CGFloat = 32
         let resetWidth: CGFloat = 42
-        let gap: CGFloat = 6
+        let gap: CGFloat = 5
         let barX = rect.minX + labelWidth + gap
         let barWidth = rect.width - labelWidth - percentWidth - resetWidth - gap * 3
         drawText(row.label, at: NSPoint(x: rect.minX, y: y - 1), attrs: attrs(size: 10.4, weight: .regular, color: tokens.termFaint, mono: true))
