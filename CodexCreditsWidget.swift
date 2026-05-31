@@ -377,8 +377,6 @@ final class ClaudeUsageCacheReader {
         for file in usageCacheFiles() {
             guard let data = try? Data(contentsOf: file),
                   data.count <= maxCacheFileSize,
-                  data.range(of: Data("claude.ai/api/organizations".utf8)) != nil,
-                  data.range(of: Data("/usage".utf8)) != nil,
                   let payload = decodeCachedUsagePayload(from: data),
                   let rows = rows(from: payload) else {
                 continue
@@ -435,8 +433,8 @@ final class ClaudeUsageCacheReader {
         for file in usageCacheFiles() {
             guard let data = try? Data(contentsOf: file),
                   data.count <= maxCacheFileSize,
-                  data.range(of: Data("claude.ai/api/organizations".utf8)) != nil,
-                  data.range(of: Data("/usage".utf8)) != nil else {
+                  let payload = decodeCachedUsagePayload(from: data),
+                  rows(from: payload) != nil else {
                 continue
             }
 
@@ -447,25 +445,23 @@ final class ClaudeUsageCacheReader {
     }
 
     private func decodeCachedUsagePayload(from data: Data) -> [String: Any]? {
-        guard let magicRange = data.range(of: zstdMagic) else {
-            return nil
-        }
-
         let httpMarker = Data("HTTP/1.1".utf8)
-        let searchStart = magicRange.upperBound
-        let searchRange = searchStart..<data.endIndex
-        let bodyEnd = data.range(of: httpMarker, options: [], in: searchRange)?.lowerBound ?? data.endIndex
-        guard bodyEnd > magicRange.lowerBound else {
-            return nil
+        var searchStart = data.startIndex
+
+        while let magicRange = data.range(of: zstdMagic, options: [], in: searchStart..<data.endIndex) {
+            let bodyEnd = data.range(of: httpMarker, options: [], in: magicRange.upperBound..<data.endIndex)?.lowerBound ?? data.endIndex
+            let compressed = data.subdata(in: magicRange.lowerBound..<bodyEnd)
+
+            if let jsonData = zstdDecode(compressed),
+               let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any],
+               rows(from: object) != nil {
+                return object
+            }
+
+            searchStart = magicRange.upperBound
         }
 
-        let compressed = data.subdata(in: magicRange.lowerBound..<bodyEnd)
-        guard let jsonData = zstdDecode(compressed),
-              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
-            return nil
-        }
-
-        return object
+        return nil
     }
 
     private func zstdDecode(_ data: Data) -> Data? {
