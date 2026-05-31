@@ -719,8 +719,8 @@ private enum WidgetStyle: String, CaseIterable {
     var size: NSSize {
         switch self {
         case .native: return NSSize(width: 332, height: 152)
-        case .mono: return NSSize(width: 306, height: 132)
-        case .terminal: return NSSize(width: 320, height: 136)
+        case .mono: return NSSize(width: 292, height: 132)
+        case .terminal: return NSSize(width: 306, height: 136)
         }
     }
 }
@@ -1298,15 +1298,19 @@ final class WidgetView: NSView {
         drawHeader(in: screenRect, tokens: tokens, titleSize: 11.5, timePrefix: "", terminal: true)
 
         var y = screenRect.maxY - 27
+        var previousBottom: CGFloat?
         for (index, service) in creditData.services.enumerated() {
             if index > 0 {
-                drawLine(y: y + 4, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
+                if let previousBottom {
+                    drawLine(y: (previousBottom + y) / 2 + 1, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
+                }
                 y -= 6
             }
             drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
             y -= 13
             for row in service.rows {
                 drawTerminalRow(row, y: y, rect: screenRect, tokens: tokens)
+                previousBottom = y
                 y -= 15
             }
         }
@@ -1395,12 +1399,19 @@ final class WidgetView: NSView {
 
     private func drawMonoRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
         let labelWidth: CGFloat = 24
-        let barWidth: CGFloat = 132
-        let barX = rect.minX + labelWidth + 8
+        let percentWidth: CGFloat = 22
+        let resetWidth: CGFloat = 43
+        let labelGap: CGFloat = 7
+        let percentGap: CGFloat = 6
+        let resetGap: CGFloat = 8
+        let barX = rect.minX + labelWidth + labelGap
+        let barWidth = rect.width - labelWidth - percentWidth - resetWidth - labelGap - percentGap - resetGap
+        let percentRight = barX + barWidth + percentGap + percentWidth
+        let resetRight = percentRight + resetGap + resetWidth
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
-        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 21, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track, fontSize: 10.7)
-        drawRight("\(row.percent)", x: barX + barWidth + 20, y: y, width: 24, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
-        drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: 48, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
+        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: max(12, Int(barWidth / 6.1)), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track, fontSize: 10.7)
+        drawRight("\(row.percent)", x: percentRight, y: y, width: percentWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
+        drawRight(tightDuration(row.remaining), x: resetRight, y: y, width: resetWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
 
     private func drawTerminalRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens) {
