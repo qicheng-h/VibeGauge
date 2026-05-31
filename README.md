@@ -38,21 +38,9 @@ Usage bars are color-coded by quota usage:
 
 ## Screenshots
 
-For the GitHub project page, place desktop screenshots here:
-
-```text
-docs/assets/vibegauge-native.png
-docs/assets/vibegauge-mono.png
-```
-
-Then add them to this section:
-
-```md
 ![VibeGauge Native skin](docs/assets/vibegauge-native.png)
-![VibeGauge Mono skin](docs/assets/vibegauge-mono.png)
-```
 
-Do not use the XHS marketing images for the GitHub README; use clean desktop screenshots instead.
+![VibeGauge Mono skin](docs/assets/vibegauge-mono.png)
 
 ## Claude Code Setup
 
