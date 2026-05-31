@@ -30,7 +30,7 @@ fileprivate struct ClaudeRowsSnapshot {
 final class CreditStore {
     private let claudeReader = ClaudeRateLimitReader()
     private let codexReader = CodexRateLimitReader()
-    private let fallback = CreditData(services: [
+    static let placeholder = CreditData(services: [
         CreditService(name: "Claude Code", rows: [
             CreditRow(label: "5h", percent: 0, remaining: "no data"),
             CreditRow(label: "7d", percent: 0, remaining: "no data"),
@@ -42,7 +42,7 @@ final class CreditStore {
     ])
 
     func load() -> CreditData {
-        var data = fallback
+        var data = Self.placeholder
 
         if let claudeSnapshot = claudeReader.loadSnapshot() {
             data.services[0].rows = claudeSnapshot.rows
@@ -1000,8 +1000,8 @@ final class WidgetView: NSView {
     override var acceptsFirstResponder: Bool { true }
 
     override init(frame frameRect: NSRect) {
-        self.creditData = store.load()
-        self.sourceSignature = store.sourceSignature()
+        self.creditData = CreditStore.placeholder
+        self.sourceSignature = ""
         self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? false
         self.widgetStyle = Self.storedStyle()
         self.widgetAppearance = Self.storedAppearance()
@@ -1013,16 +1013,22 @@ final class WidgetView: NSView {
         RunLoop.main.add(refreshTimer, forMode: .common)
         timer = refreshTimer
         updateTooltips()
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshNow(checkSignature: true)
+        }
     }
 
     required init?(coder: NSCoder) {
-        self.creditData = store.load()
-        self.sourceSignature = store.sourceSignature()
+        self.creditData = CreditStore.placeholder
+        self.sourceSignature = ""
         self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? false
         self.widgetStyle = Self.storedStyle()
         self.widgetAppearance = Self.storedAppearance()
         super.init(coder: coder)
         updateTooltips()
+        DispatchQueue.main.async { [weak self] in
+            self?.refreshNow(checkSignature: true)
+        }
     }
 
     deinit {
@@ -1035,7 +1041,7 @@ final class WidgetView: NSView {
     }
 
     func reload() {
-        refreshNow()
+        refreshNow(checkSignature: true)
     }
 
     static var initialSize: NSSize {
@@ -1054,16 +1060,16 @@ final class WidgetView: NSView {
 
     private func automaticRefresh() {
         sourceCheckCounter += 1
-        refreshNow()
+        refreshNow(checkSignature: sourceCheckCounter >= 4)
     }
 
-    private func refreshNow() {
+    private func refreshNow(checkSignature: Bool) {
         guard !refreshInFlight else {
             return
         }
 
         refreshInFlight = true
-        let shouldCheckSignature = sourceCheckCounter >= 4
+        let shouldCheckSignature = checkSignature || sourceSignature.isEmpty
         if shouldCheckSignature {
             sourceCheckCounter = 0
         }
