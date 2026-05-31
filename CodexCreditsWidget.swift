@@ -186,7 +186,7 @@ final class ClaudeRateLimitReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            percent: max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -241,7 +241,7 @@ final class ClaudeRateLimitReader {
     private func resetCountdown(until timestamp: TimeInterval) -> ResetDisplay {
         let seconds = max(0, Int(timestamp - Date().timeIntervalSince1970))
         if seconds == 0 {
-            return ResetDisplay(remaining: "refreshing", expired: true)
+            return ResetDisplay(remaining: "now", expired: true)
         }
 
         return ResetDisplay(remaining: countdown(seconds: seconds), expired: false)
@@ -507,7 +507,7 @@ final class ClaudeUsageCacheReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            percent: max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -535,7 +535,7 @@ final class ClaudeUsageCacheReader {
 
         let seconds = max(0, Int(date.timeIntervalSinceNow))
         if seconds == 0 {
-            return ResetDisplay(remaining: "refreshing", expired: true)
+            return ResetDisplay(remaining: "now", expired: true)
         }
 
         return ResetDisplay(remaining: formatDuration(seconds: seconds), expired: false)
@@ -709,7 +709,7 @@ final class CodexRateLimitReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            percent: max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -722,7 +722,7 @@ final class CodexRateLimitReader {
         let seconds = max(0, Int(timestamp - Date().timeIntervalSince1970))
 
         if seconds == 0 {
-            return ResetDisplay(remaining: "refreshing", expired: true)
+            return ResetDisplay(remaining: "now", expired: true)
         }
 
         let days = seconds / 86_400
