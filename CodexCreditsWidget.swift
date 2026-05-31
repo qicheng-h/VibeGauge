@@ -569,6 +569,14 @@ private struct CodexLogEvent: Decodable {
     let payload: CodexPayload?
 }
 
+private struct CodexSessionMetaEvent: Decodable {
+    let payload: CodexSessionMetaPayload?
+}
+
+private struct CodexSessionMetaPayload: Decodable {
+    let cwd: String?
+}
+
 private struct CodexPayload: Decodable {
     let rate_limits: CodexRateLimits?
 }
@@ -587,6 +595,7 @@ private struct CodexLimit: Decodable {
 private struct CodexRateLimitSnapshot {
     let limits: CodexRateLimits
     let timestamp: Date
+    let sourceCwd: String?
 }
 
 final class CodexRateLimitReader {
@@ -637,6 +646,8 @@ final class CodexRateLimitReader {
         ]
 
         var latestSnapshot: CodexRateLimitSnapshot?
+        var latestLocalSnapshot: CodexRateLimitSnapshot?
+        let appDirectory = Bundle.main.bundleURL.deletingLastPathComponent().standardizedFileURL.path
 
         for file in recentJSONLFiles(roots: roots) {
             guard let snapshot = latestRateLimits(in: file) else {
@@ -646,9 +657,14 @@ final class CodexRateLimitReader {
             if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
                 latestSnapshot = snapshot
             }
+
+            if snapshot.sourceCwd == appDirectory,
+               latestLocalSnapshot == nil || snapshot.timestamp > latestLocalSnapshot!.timestamp {
+                latestLocalSnapshot = snapshot
+            }
         }
 
-        return latestSnapshot?.limits
+        return (latestLocalSnapshot ?? latestSnapshot)?.limits
     }
 
     private func recentJSONLFiles(roots: [URL]) -> [URL] {
@@ -682,14 +698,34 @@ final class CodexRateLimitReader {
         }
 
         let text = String(decoding: data, as: UTF8.self)
+        let sourceCwd = sessionCwd(from: file)
 
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
             if let eventData = String(line).data(using: .utf8),
                let event = try? decoder.decode(CodexLogEvent.self, from: eventData),
                let limits = event.payload?.rate_limits,
                let timestamp = parseTimestamp(event.timestamp) {
-                return CodexRateLimitSnapshot(limits: limits, timestamp: timestamp)
+                return CodexRateLimitSnapshot(limits: limits, timestamp: timestamp, sourceCwd: sourceCwd)
             }
+        }
+
+        return nil
+    }
+
+    private func sessionCwd(from file: URL) -> String? {
+        guard let data = headData(from: file, maxBytes: 64 * 1024) else {
+            return nil
+        }
+
+        let text = String(decoding: data, as: UTF8.self)
+        for line in text.split(separator: "\n") where line.contains("\"session_meta\"") {
+            guard let eventData = String(line).data(using: .utf8),
+                  let event = try? decoder.decode(CodexSessionMetaEvent.self, from: eventData),
+                  let cwd = event.payload?.cwd else {
+                continue
+            }
+
+            return URL(fileURLWithPath: cwd).standardizedFileURL.path
         }
 
         return nil
@@ -720,6 +756,18 @@ final class CodexRateLimitReader {
         let offset = size > maxBytes ? size - maxBytes : 0
         try? handle.seek(toOffset: offset)
         return try? handle.readToEnd()
+    }
+
+    private func headData(from file: URL, maxBytes: Int) -> Data? {
+        guard let handle = try? FileHandle(forReadingFrom: file) else {
+            return nil
+        }
+
+        defer {
+            try? handle.close()
+        }
+
+        return try? handle.read(upToCount: maxBytes)
     }
 
     private func row(from limit: CodexLimit, fallbackLabel: String) -> CreditRow {
