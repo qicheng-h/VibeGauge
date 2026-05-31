@@ -706,14 +706,12 @@ final class CodexRateLimitReader {
 private enum WidgetStyle: String, CaseIterable {
     case native
     case mono
-    case playful
     case terminal
 
     var title: String {
         switch self {
         case .native: return "Native"
         case .mono: return "Mono"
-        case .playful: return "Playful"
         case .terminal: return "Terminal"
         }
     }
@@ -722,7 +720,6 @@ private enum WidgetStyle: String, CaseIterable {
         switch self {
         case .native: return NSSize(width: 384, height: 222)
         case .mono: return NSSize(width: 362, height: 202)
-        case .playful: return NSSize(width: 388, height: 236)
         case .terminal: return NSSize(width: 352, height: 176)
         }
     }
@@ -1136,8 +1133,6 @@ final class WidgetView: NSView {
             drawNativeWidget(in: bounds, tokens: tokens)
         case .mono:
             drawMonoWidget(in: bounds, tokens: tokens)
-        case .playful:
-            drawPlayfulWidget(in: bounds, tokens: tokens)
         case .terminal:
             drawTerminalWidget(in: bounds, tokens: tokens)
         }
@@ -1190,7 +1185,6 @@ final class WidgetView: NSView {
         switch widgetStyle {
         case .native: return 22
         case .mono: return 18
-        case .playful: return 26
         case .terminal: return 17
         }
     }
@@ -1199,7 +1193,6 @@ final class WidgetView: NSView {
         switch widgetStyle {
         case .native: return 6
         case .mono, .terminal: return 5
-        case .playful: return 7
         }
     }
 
@@ -1238,29 +1231,6 @@ final class WidgetView: NSView {
                 y -= 21
             }
             y -= 5
-        }
-    }
-
-    private func drawPlayfulWidget(in rect: NSRect, tokens: WidgetTokens) {
-        screenRect = rect.insetBy(dx: 14, dy: 14)
-        drawRounded(rect, radius: 24, fill: tokens.playBackground, stroke: tokens.playBorder)
-        drawHeader(in: screenRect.insetBy(dx: 4, dy: 2), tokens: tokens, titleSize: 16, timePrefix: "", mono: false)
-
-        var y = screenRect.maxY - 55
-        let cardHeight: CGFloat = 73
-        for service in creditData.services {
-            let accent = accent(for: service, tokens: tokens)
-            let card = NSRect(x: screenRect.minX, y: y - cardHeight + 18, width: screenRect.width, height: cardHeight)
-            drawRounded(card, radius: 16, fill: accent.withAlphaComponent(widgetAppearance == .light ? 0.10 : 0.18), stroke: .clear)
-            drawBadge(service, at: NSPoint(x: card.minX + 13, y: card.maxY - 31), color: accent)
-            drawText(service.name, at: NSPoint(x: card.minX + 43, y: card.maxY - 27), attrs: attrs(size: 14, weight: .heavy, color: tokens.text, mono: false))
-
-            var rowY = card.maxY - 48
-            for row in service.rows {
-                drawPlayfulRow(row, y: rowY, rect: card.insetBy(dx: 13, dy: 0), tokens: tokens, accent: accent)
-                rowY -= 31
-            }
-            y -= cardHeight + 10
         }
     }
 
@@ -1354,16 +1324,6 @@ final class WidgetView: NSView {
         drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 14, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
         drawRight("\(row.percent)", x: barX + barWidth + 41, y: y, width: 30, attrs: attrs(size: 12, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
         drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: 58, attrs: attrs(size: 12, weight: .regular, color: tokens.muted, mono: true))
-    }
-
-    private func drawPlayfulRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
-        let left = max(0, 100 - row.percent)
-        drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 12, weight: .bold, color: tokens.muted, mono: false))
-        drawText("\(left)%", at: NSPoint(x: rect.maxX - 53, y: y), attrs: attrs(size: 13.5, weight: .heavy, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
-        drawText("left", at: NSPoint(x: rect.maxX - 22, y: y + 1), attrs: attrs(size: 10.5, weight: .bold, color: tokens.faint, mono: false))
-        let barRect = NSRect(x: rect.minX, y: y - 14, width: rect.width - 67, height: 9)
-        drawProgress(percent: row.percent, in: barRect, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), track: tokens.track, radius: 6)
-        drawRight(row.remaining, x: rect.maxX, y: y - 17, width: 60, attrs: attrs(size: 11, weight: .bold, color: tokens.muted, mono: false))
     }
 
     private func drawTerminalRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens) {

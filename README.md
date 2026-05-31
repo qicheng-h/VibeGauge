@@ -41,7 +41,7 @@ You can also double-click `Codex Credits.app` in Finder.
 Controls:
 
 - Click `x` on the widget to quit.
-- Click the shirt button to cycle Native, Mono, Playful, and Terminal skins.
+- Click the shirt button to cycle Native, Mono, and Terminal skins.
 - Click the sun/moon button to toggle light/dark mode.
 - Click the pin button to toggle always-on-top mode.
 - Click the refresh button to refresh live quota data.
@@ -56,7 +56,6 @@ Styles:
 
 - `Native`: macOS glass-style panel.
 - `Mono`: dense terminal-style text panel.
-- `Playful`: rounded card layout.
 - `Terminal`: retro sage/phosphor layout.
 
 Data sources:
