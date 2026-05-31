@@ -37,7 +37,7 @@ Controls:
 - Click `r` to refresh live quota data.
 - Right-click the widget to refresh or quit.
 - Press `Esc` while the widget is focused to quit.
-- The widget checks for updates every two minutes and skips full reloads when Claude/Codex source files have not changed.
+- The widget redraws countdowns every 30 seconds and checks source-file changes every two minutes.
 
 Data sources:
 

@@ -96,10 +96,14 @@ final class CreditStore {
 
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
+    private var capturedAt: Date = .distantPast
 
     func loadRows() -> [CreditRow]? {
         let file = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/codex-credits-status.json")
+
+        capturedAt = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+            ?? Date()
 
         guard let data = try? Data(contentsOf: file),
               let object = try? JSONSerialization.jsonObject(with: data),
@@ -158,7 +162,8 @@ final class ClaudeRateLimitReader {
 
     private func resetLabel(from limit: [String: Any]) -> String {
         if let seconds = number(in: limit, keys: ["reset_in_seconds", "seconds_until_reset", "remaining_seconds"]) {
-            return countdown(seconds: Int(seconds))
+            let resetAt = capturedAt.addingTimeInterval(seconds)
+            return resetCountdown(until: resetAt.timeIntervalSince1970)
         }
 
         if let timestamp = number(in: limit, keys: ["resets_at", "reset_at", "resetsAt", "resetAt"]) {
@@ -466,6 +471,7 @@ final class WidgetView: NSView {
     private let store = CreditStore()
     private var creditData: CreditData
     private var timer: Timer?
+    private var sourceCheckCounter = 0
     private var sourceSignature: String
     private var alwaysOnTop: Bool
     private var screenRect: NSRect = .zero
@@ -483,8 +489,8 @@ final class WidgetView: NSView {
         self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? true
         super.init(frame: frameRect)
         wantsLayer = true
-        let refreshTimer = Timer(timeInterval: 120, repeats: true) { [weak self] _ in
-            self?.reloadIfSourcesChanged()
+        let refreshTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+            self?.automaticRefresh()
         }
         RunLoop.main.add(refreshTimer, forMode: .common)
         timer = refreshTimer
@@ -507,11 +513,15 @@ final class WidgetView: NSView {
         needsDisplay = true
     }
 
-    private func reloadIfSourcesChanged() {
-        let nextSignature = store.sourceSignature()
+    private func automaticRefresh() {
+        sourceCheckCounter += 1
 
-        if nextSignature != sourceSignature {
-            sourceSignature = nextSignature
+        if sourceCheckCounter >= 4 {
+            let nextSignature = store.sourceSignature()
+            if nextSignature != sourceSignature {
+                sourceSignature = nextSignature
+            }
+            sourceCheckCounter = 0
         }
 
         creditData = store.load()
