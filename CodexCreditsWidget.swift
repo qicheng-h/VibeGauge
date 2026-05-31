@@ -17,6 +17,7 @@ struct CreditRow: Codable {
 }
 
 final class CreditStore {
+    private let codexReader = CodexRateLimitReader()
     private let fallback = CreditData(services: [
         CreditService(name: "Claude Code", rows: [
             CreditRow(label: "5h", percent: 0, remaining: "no data"),
@@ -35,7 +36,7 @@ final class CreditStore {
             data.services[0].rows = claudeRows
         }
 
-        if let codexRows = CodexRateLimitReader().loadRows() {
+        if let codexRows = codexReader.loadRows(signature: sourceSignature()) {
             data.services[1].rows = codexRows
         }
 
@@ -313,9 +314,21 @@ private struct CodexLimit: Decodable {
 final class CodexRateLimitReader {
     private let decoder = JSONDecoder()
     private let fileManager = FileManager.default
+    private var cachedSignature: String?
+    private var cachedLimits: CodexRateLimits?
 
-    func loadRows() -> [CreditRow]? {
-        guard let limits = latestRateLimits() else {
+    func loadRows(signature: String) -> [CreditRow]? {
+        let limits: CodexRateLimits?
+
+        if cachedSignature == signature {
+            limits = cachedLimits
+        } else {
+            limits = latestRateLimits()
+            cachedLimits = limits
+            cachedSignature = signature
+        }
+
+        guard let limits else {
             return nil
         }
 
@@ -470,9 +483,11 @@ final class WidgetView: NSView {
         self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? true
         super.init(frame: frameRect)
         wantsLayer = true
-        timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
+        let refreshTimer = Timer(timeInterval: 120, repeats: true) { [weak self] _ in
             self?.reloadIfSourcesChanged()
         }
+        RunLoop.main.add(refreshTimer, forMode: .common)
+        timer = refreshTimer
     }
 
     required init?(coder: NSCoder) {
@@ -496,10 +511,10 @@ final class WidgetView: NSView {
         let nextSignature = store.sourceSignature()
 
         if nextSignature != sourceSignature {
-            creditData = store.load()
             sourceSignature = nextSignature
         }
 
+        creditData = store.load()
         needsDisplay = true
     }
 
