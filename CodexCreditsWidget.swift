@@ -720,19 +720,10 @@ private enum WidgetStyle: String, CaseIterable {
 
     var size: NSSize {
         switch self {
-        case .native: return NSSize(width: 348, height: 222)
-        case .mono: return NSSize(width: 330, height: 198)
-        case .playful: return NSSize(width: 360, height: 226)
-        case .terminal: return NSSize(width: 326, height: 166)
-        }
-    }
-
-    var controlLabel: String {
-        switch self {
-        case .native: return "n"
-        case .mono: return "m"
-        case .playful: return "p"
-        case .terminal: return "t"
+        case .native: return NSSize(width: 384, height: 222)
+        case .mono: return NSSize(width: 362, height: 202)
+        case .playful: return NSSize(width: 388, height: 236)
+        case .terminal: return NSSize(width: 352, height: 176)
         }
     }
 }
@@ -871,6 +862,7 @@ final class WidgetView: NSView {
     private var widgetStyle: WidgetStyle
     private var widgetAppearance: WidgetAppearance
     private var screenRect: NSRect = .zero
+    private var tooltipTexts: [NSView.ToolTipTag: String] = [:]
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMM d h:mm a"
@@ -892,6 +884,7 @@ final class WidgetView: NSView {
         }
         RunLoop.main.add(refreshTimer, forMode: .common)
         timer = refreshTimer
+        updateTooltips()
     }
 
     required init?(coder: NSCoder) {
@@ -901,6 +894,7 @@ final class WidgetView: NSView {
         self.widgetStyle = Self.storedStyle()
         self.widgetAppearance = Self.storedAppearance()
         super.init(coder: coder)
+        updateTooltips()
     }
 
     deinit {
@@ -996,6 +990,11 @@ final class WidgetView: NSView {
             return
         }
 
+        if appearanceButtonRect.contains(point) {
+            toggleAppearance()
+            return
+        }
+
         if topButtonRect.contains(point) {
             toggleAlwaysOnTop()
             return
@@ -1024,6 +1023,7 @@ final class WidgetView: NSView {
         widgetStyle = styles[(index + 1) % styles.count]
         UserDefaults.standard.set(widgetStyle.rawValue, forKey: Self.styleKey)
         resizeWindowForCurrentStyle()
+        updateTooltips()
         needsDisplay = true
     }
 
@@ -1035,6 +1035,14 @@ final class WidgetView: NSView {
         widgetStyle = WidgetStyle.allCases[sender.tag]
         UserDefaults.standard.set(widgetStyle.rawValue, forKey: Self.styleKey)
         resizeWindowForCurrentStyle()
+        updateTooltips()
+        needsDisplay = true
+    }
+
+    private func toggleAppearance() {
+        widgetAppearance = widgetAppearance == .dark ? .light : .dark
+        UserDefaults.standard.set(widgetAppearance.rawValue, forKey: Self.appearanceKey)
+        updateTooltips()
         needsDisplay = true
     }
 
@@ -1045,6 +1053,7 @@ final class WidgetView: NSView {
 
         widgetAppearance = WidgetAppearance.allCases[sender.tag]
         UserDefaults.standard.set(widgetAppearance.rawValue, forKey: Self.appearanceKey)
+        updateTooltips()
         needsDisplay = true
     }
 
@@ -1062,12 +1071,44 @@ final class WidgetView: NSView {
         setFrameSize(widgetStyle.size)
     }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        updateTooltips()
+    }
+
+    private func updateTooltips() {
+        removeAllToolTips()
+        tooltipTexts.removeAll()
+        registerTooltip(styleButtonRect, "Switch skin: \(nextStyleTitle())")
+        registerTooltip(appearanceButtonRect, "Toggle \(widgetAppearance == .dark ? "light" : "dark") mode")
+        registerTooltip(topButtonRect, alwaysOnTop ? "Turn always on top off" : "Keep widget always on top")
+        registerTooltip(refreshButtonRect, "Refresh credits now")
+        registerTooltip(closeButtonRect, "Close widget")
+        registerTooltip(dragHandleRect, "Drag widget")
+    }
+
+    private func registerTooltip(_ rect: NSRect, _ text: String) {
+        let tag = addToolTip(rect, owner: self, userData: nil)
+        tooltipTexts[tag] = text
+    }
+
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
+        tooltipTexts[tag] ?? ""
+    }
+
+    private func nextStyleTitle() -> String {
+        let styles = WidgetStyle.allCases
+        let index = styles.firstIndex(of: widgetStyle) ?? 0
+        return styles[(index + 1) % styles.count].title
+    }
+
     @objc private func toggleAlwaysOnTop() {
         alwaysOnTop.toggle()
         UserDefaults.standard.set(alwaysOnTop, forKey: Self.alwaysOnTopKey)
         if let window {
             Self.applyWindowBehavior(to: window, alwaysOnTop: alwaysOnTop)
         }
+        updateTooltips()
         needsDisplay = true
     }
 
@@ -1120,10 +1161,16 @@ final class WidgetView: NSView {
         return NSRect(x: screen.maxX - size * 3 - controlGap * 2, y: screen.maxY - size, width: size, height: size)
     }
 
-    private var styleButtonRect: NSRect {
+    private var appearanceButtonRect: NSRect {
         let screen = activeScreenRect
         let size = controlSize
         return NSRect(x: screen.maxX - size * 4 - controlGap * 3, y: screen.maxY - size, width: size, height: size)
+    }
+
+    private var styleButtonRect: NSRect {
+        let screen = activeScreenRect
+        let size = controlSize
+        return NSRect(x: screen.maxX - size * 5 - controlGap * 4, y: screen.maxY - size, width: size, height: size)
     }
 
     private var dragHandleRect: NSRect {
@@ -1254,13 +1301,14 @@ final class WidgetView: NSView {
     private func drawWindowButtons(tokens: WidgetTokens, terminal: Bool = false, mono: Bool = false) {
         let color = terminal ? tokens.termDim : tokens.muted
         let onColor = terminal ? tokens.termText : tokens.text
-        drawButton(rect: styleButtonRect, label: widgetStyle.controlLabel, tokens: tokens, color: onColor, active: false, terminal: terminal, square: mono)
-        drawButton(rect: topButtonRect, label: "^", tokens: tokens, color: alwaysOnTop ? onColor : color, active: alwaysOnTop, terminal: terminal, square: mono)
-        drawButton(rect: refreshButtonRect, label: "r", tokens: tokens, color: color, terminal: terminal, square: mono)
-        drawButton(rect: closeButtonRect, label: "x", tokens: tokens, color: color, terminal: terminal, square: mono)
+        drawButton(rect: styleButtonRect, symbol: "tshirt", fallback: "S", tokens: tokens, color: onColor, terminal: terminal, square: mono)
+        drawButton(rect: appearanceButtonRect, symbol: widgetAppearance == .dark ? "moon.fill" : "sun.max.fill", fallback: widgetAppearance == .dark ? "D" : "L", tokens: tokens, color: onColor, active: true, terminal: terminal, square: mono)
+        drawButton(rect: topButtonRect, symbol: alwaysOnTop ? "pin.fill" : "pin", fallback: "^", tokens: tokens, color: alwaysOnTop ? onColor : color, active: alwaysOnTop, terminal: terminal, square: mono)
+        drawButton(rect: refreshButtonRect, symbol: "arrow.clockwise", fallback: "R", tokens: tokens, color: color, terminal: terminal, square: mono)
+        drawButton(rect: closeButtonRect, symbol: "xmark", fallback: "X", tokens: tokens, color: color, terminal: terminal, square: mono)
     }
 
-    private func drawButton(rect: NSRect, label: String, tokens: WidgetTokens, color: NSColor, active: Bool = false, terminal: Bool = false, square: Bool = false) {
+    private func drawButton(rect: NSRect, symbol: String, fallback: String, tokens: WidgetTokens, color: NSColor, active: Bool = false, terminal: Bool = false, square: Bool = false) {
         let fill = active ? tokens.controlOn : (terminal || square ? .clear : tokens.controlBackground)
         let stroke = terminal ? tokens.termBorder : tokens.controlBorder
         let path = NSBezierPath(roundedRect: rect, xRadius: square ? 5 : rect.width / 2, yRadius: square ? 5 : rect.height / 2)
@@ -1268,9 +1316,20 @@ final class WidgetView: NSView {
         path.fill()
         stroke.setStroke()
         path.stroke()
+
+        if let image = NSImage(systemSymbolName: symbol, accessibilityDescription: fallback) {
+            let sizeConfig = NSImage.SymbolConfiguration(pointSize: rect.height <= 18 ? 9.5 : 11, weight: .semibold)
+            let colorConfig = NSImage.SymbolConfiguration(hierarchicalColor: color)
+            let config = sizeConfig.applying(colorConfig)
+            let symbolImage = image.withSymbolConfiguration(config) ?? image
+            let imageRect = NSRect(x: rect.midX - 6, y: rect.midY - 6, width: 12, height: 12)
+            symbolImage.draw(in: imageRect, from: .zero, operation: .sourceOver, fraction: 1)
+            return
+        }
+
         let buttonAttrs = attrs(size: rect.height <= 18 ? 8 : 9, weight: .bold, color: color, mono: true)
-        let size = label.size(withAttributes: buttonAttrs)
-        drawText(label, at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), attrs: buttonAttrs)
+        let size = fallback.size(withAttributes: buttonAttrs)
+        drawText(fallback, at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), attrs: buttonAttrs)
     }
 
     private func drawLinearRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor, height: CGFloat, radius: CGFloat, showPercentSymbol: Bool) {
