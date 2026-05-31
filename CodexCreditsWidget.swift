@@ -967,10 +967,12 @@ final class WidgetView: NSView {
     private static let styleKey = "cw-style"
     private static let appearanceKey = "cw-theme"
     private let store = CreditStore()
+    private let refreshQueue = DispatchQueue(label: "local.vibegauge.refresh")
     private var creditData: CreditData
     private var timer: Timer?
     private var sourceCheckCounter = 0
     private var sourceSignature: String
+    private var refreshInFlight = false
     private var alwaysOnTop: Bool
     private var widgetStyle: WidgetStyle
     private var widgetAppearance: WidgetAppearance
@@ -1033,9 +1035,7 @@ final class WidgetView: NSView {
     }
 
     func reload() {
-        creditData = store.load()
-        sourceSignature = store.sourceSignature()
-        needsDisplay = true
+        refreshNow()
     }
 
     static var initialSize: NSSize {
@@ -1054,17 +1054,40 @@ final class WidgetView: NSView {
 
     private func automaticRefresh() {
         sourceCheckCounter += 1
+        refreshNow()
+    }
 
-        if sourceCheckCounter >= 4 {
-            let nextSignature = store.sourceSignature()
-            if nextSignature != sourceSignature {
-                sourceSignature = nextSignature
-            }
-            sourceCheckCounter = 0
+    private func refreshNow() {
+        guard !refreshInFlight else {
+            return
         }
 
-        creditData = store.load()
-        needsDisplay = true
+        refreshInFlight = true
+        let shouldCheckSignature = sourceCheckCounter >= 4
+        if shouldCheckSignature {
+            sourceCheckCounter = 0
+        }
+        let currentSignature = sourceSignature
+
+        refreshQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let nextData = self.store.load()
+            let nextSignature = shouldCheckSignature ? self.store.sourceSignature() : currentSignature
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.creditData = nextData
+                self.sourceSignature = nextSignature
+                self.refreshInFlight = false
+                self.needsDisplay = true
+            }
+        }
     }
 
     override func rightMouseDown(with event: NSEvent) {
