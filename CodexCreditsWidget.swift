@@ -718,9 +718,9 @@ private enum WidgetStyle: String, CaseIterable {
 
     var size: NSSize {
         switch self {
-        case .native: return NSSize(width: 384, height: 222)
-        case .mono: return NSSize(width: 362, height: 202)
-        case .terminal: return NSSize(width: 352, height: 176)
+        case .native: return NSSize(width: 360, height: 194)
+        case .mono: return NSSize(width: 336, height: 174)
+        case .terminal: return NSSize(width: 342, height: 160)
         }
     }
 }
@@ -1170,7 +1170,7 @@ final class WidgetView: NSView {
 
     private var dragHandleRect: NSRect {
         let screen = activeScreenRect
-        return NSRect(x: screen.midX - 18, y: screen.maxY - 20, width: 36, height: 13)
+        return NSRect(x: screen.midX - 16, y: screen.maxY - 18, width: 32, height: 11)
     }
 
     private var activeScreenRect: NSRect {
@@ -1183,77 +1183,78 @@ final class WidgetView: NSView {
 
     private var controlSize: CGFloat {
         switch widgetStyle {
-        case .native: return 22
-        case .mono: return 18
-        case .terminal: return 17
+        case .native: return 20
+        case .mono: return 17
+        case .terminal: return 16
         }
     }
 
     private var controlGap: CGFloat {
         switch widgetStyle {
-        case .native: return 6
-        case .mono, .terminal: return 5
+        case .native: return 5
+        case .mono, .terminal: return 4
         }
     }
 
     private func drawNativeWidget(in rect: NSRect, tokens: WidgetTokens) {
-        screenRect = rect.insetBy(dx: 18, dy: 14)
-        drawRounded(rect, radius: 20, fill: tokens.nativeBackground, stroke: tokens.nativeBorder)
-        drawHeader(in: screenRect, tokens: tokens, titleSize: 14.5, timePrefix: "")
+        screenRect = rect.insetBy(dx: 16, dy: 12)
+        drawRounded(rect, radius: 18, fill: tokens.nativeBackground, stroke: tokens.nativeBorder)
+        drawHeader(in: screenRect, tokens: tokens, titleSize: 14, timePrefix: "")
 
-        var y = screenRect.maxY - 42
+        var y = screenRect.maxY - 38
         for service in creditData.services {
             let accent = accent(for: service, tokens: tokens)
-            drawSwatch(at: NSPoint(x: screenRect.minX, y: y + 4), color: accent)
-            drawText(service.name, at: NSPoint(x: screenRect.minX + 15, y: y), attrs: attrs(size: 12.5, weight: .bold, color: tokens.text, mono: false))
-            y -= 23
+            drawSwatch(at: NSPoint(x: screenRect.minX, y: y + 3), color: accent)
+            drawText(service.name, at: NSPoint(x: screenRect.minX + 14, y: y), attrs: attrs(size: 12.2, weight: .bold, color: tokens.text, mono: false))
+            y -= 20
 
             for row in service.rows {
                 drawLinearRow(row, y: y, rect: screenRect, tokens: tokens, accent: accent, height: 6, radius: 4, showPercentSymbol: true)
-                y -= 24
+                y -= 21
             }
-            y -= 5
+            y -= 1
         }
     }
 
     private func drawMonoWidget(in rect: NSRect, tokens: WidgetTokens) {
-        screenRect = rect.insetBy(dx: 16, dy: 13)
-        drawRounded(rect, radius: 11, fill: tokens.monoBackground, stroke: tokens.monoBorder)
+        screenRect = rect.insetBy(dx: 14, dy: 12)
+        drawRounded(rect, radius: 9, fill: tokens.monoBackground, stroke: tokens.monoBorder)
         drawHeader(in: screenRect, tokens: tokens, titleSize: 12, timePrefix: "", title: "plan_usage", mono: true)
 
-        var y = screenRect.maxY - 39
+        var y = screenRect.maxY - 34
         for service in creditData.services {
             let accent = accent(for: service, tokens: tokens)
-            drawText(shortName(for: service).lowercased() + " >", at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 12, weight: .bold, color: accent, mono: true))
-            y -= 20
+            drawText(shortName(for: service).lowercased() + " >", at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 11.5, weight: .bold, color: accent, mono: true))
+            y -= 17
             for row in service.rows {
                 drawMonoRow(row, y: y, rect: screenRect, tokens: tokens, accent: accent)
-                y -= 21
+                y -= 18
             }
-            y -= 5
+            y -= 1
         }
     }
 
     private func drawTerminalWidget(in rect: NSRect, tokens: WidgetTokens) {
-        screenRect = rect.insetBy(dx: 13, dy: 11)
+        screenRect = rect.insetBy(dx: 12, dy: 10)
         let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
         NSGradient(colors: [tokens.termBackgroundTop, tokens.termBackgroundBottom])?.draw(in: path, angle: -35)
         tokens.termBorder.setStroke()
         path.stroke()
-        drawHeader(in: screenRect, tokens: tokens, titleSize: 13, timePrefix: "May 31 ", terminal: true)
+        drawHeader(in: screenRect, tokens: tokens, titleSize: 12.5, timePrefix: "May 31 ", terminal: true)
 
-        var y = screenRect.maxY - 35
+        var y = screenRect.maxY - 32
         for (index, service) in creditData.services.enumerated() {
             if index > 0 {
-                drawLine(y: y + 12, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
+                drawLine(y: y + 8, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
+                y -= 2
             }
-            drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 11.5, weight: .bold, color: tokens.termDim, mono: true))
-            y -= 18
+            drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 11.2, weight: .bold, color: tokens.termDim, mono: true))
+            y -= 16
             for row in service.rows {
                 drawTerminalRow(row, y: y, rect: screenRect, tokens: tokens)
-                y -= 20
+                y -= 18
             }
-            y -= 4
+            y -= 2
         }
     }
 
@@ -1303,46 +1304,46 @@ final class WidgetView: NSView {
     }
 
     private func drawLinearRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor, height: CGFloat, radius: CGFloat, showPercentSymbol: Bool) {
-        let labelWidth: CGFloat = 26
-        let percentWidth: CGFloat = 38
-        let resetWidth: CGFloat = 52
-        let gap: CGFloat = 11
+        let labelWidth: CGFloat = 24
+        let percentWidth: CGFloat = 36
+        let resetWidth: CGFloat = 48
+        let gap: CGFloat = 10
         let barX = rect.minX + labelWidth + gap
         let barWidth = rect.width - labelWidth - percentWidth - resetWidth - gap * 3
-        drawText(row.label, at: NSPoint(x: rect.minX, y: y - 4), attrs: attrs(size: 11.5, weight: .semibold, color: tokens.faint, mono: false))
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y - 4), attrs: attrs(size: 11, weight: .semibold, color: tokens.faint, mono: false))
         drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), track: tokens.track, radius: radius)
         let percent = showPercentSymbol ? "\(row.percent)%" : "\(row.percent)"
-        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 12, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
-        drawRight(row.remaining, x: rect.maxX, y: y - 5, width: resetWidth, attrs: attrs(size: 11, weight: .regular, color: tokens.muted, mono: false))
+        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 11.5, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
+        drawRight(row.remaining, x: rect.maxX, y: y - 5, width: resetWidth, attrs: attrs(size: 10.5, weight: .regular, color: tokens.muted, mono: false))
     }
 
     private func drawMonoRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
-        let labelWidth: CGFloat = 30
-        let barWidth: CGFloat = 142
-        let barX = rect.minX + labelWidth + 11
-        drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 12, weight: .regular, color: tokens.muted, mono: true))
-        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 14, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
-        drawRight("\(row.percent)", x: barX + barWidth + 41, y: y, width: 30, attrs: attrs(size: 12, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
-        drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: 58, attrs: attrs(size: 12, weight: .regular, color: tokens.muted, mono: true))
+        let labelWidth: CGFloat = 27
+        let barWidth: CGFloat = 108
+        let barX = rect.minX + labelWidth + 10
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 11.5, weight: .regular, color: tokens.muted, mono: true))
+        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 13, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track, fontSize: 11.5)
+        drawRight("\(row.percent)", x: barX + barWidth + 31, y: y, width: 28, attrs: attrs(size: 11.5, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
+        drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: 54, attrs: attrs(size: 11.5, weight: .regular, color: tokens.muted, mono: true))
     }
 
     private func drawTerminalRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens) {
         let labelWidth: CGFloat = 24
-        let percentWidth: CGFloat = 40
-        let resetWidth: CGFloat = 52
-        let gap: CGFloat = 10
+        let percentWidth: CGFloat = 38
+        let resetWidth: CGFloat = 48
+        let gap: CGFloat = 9
         let barX = rect.minX + labelWidth + gap
         let barWidth = rect.width - labelWidth - percentWidth - resetWidth - gap * 3
-        drawText(row.label, at: NSPoint(x: rect.minX, y: y - 1), attrs: attrs(size: 11.5, weight: .regular, color: tokens.termFaint, mono: true))
-        let bar = NSRect(x: barX, y: y, width: barWidth, height: 10)
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y - 1), attrs: attrs(size: 11, weight: .regular, color: tokens.termFaint, mono: true))
+        let bar = NSRect(x: barX, y: y, width: barWidth, height: 9)
         drawDottedTrack(in: bar, tokens: tokens)
         let fill = row.percent >= 95 ? tokens.termWarn : tokens.termFill
         fill.setFill()
         NSBezierPath(rect: NSRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(row.percent) / 100, height: bar.height)).fill()
         tokens.termBorder.setStroke()
         NSBezierPath(rect: bar).stroke()
-        drawRight("\(row.percent)%", x: bar.maxX + gap + percentWidth, y: y - 2, width: percentWidth, attrs: attrs(size: 11.5, weight: .bold, color: row.percent >= 95 ? tokens.termWarn : tokens.termText, mono: true))
-        drawRight(row.remaining, x: rect.maxX, y: y - 2, width: resetWidth, attrs: attrs(size: 11.5, weight: .regular, color: tokens.termDim, mono: true))
+        drawRight("\(row.percent)%", x: bar.maxX + gap + percentWidth, y: y - 2, width: percentWidth, attrs: attrs(size: 11, weight: .bold, color: row.percent >= 95 ? tokens.termWarn : tokens.termText, mono: true))
+        drawRight(row.remaining, x: rect.maxX, y: y - 2, width: resetWidth, attrs: attrs(size: 11, weight: .regular, color: tokens.termDim, mono: true))
     }
 
     private func drawProgress(percent: Int, in rect: NSRect, fill: NSColor, track: NSColor, radius: CGFloat) {
@@ -1353,13 +1354,14 @@ final class WidgetView: NSView {
         }
     }
 
-    private func drawBlockBar(percent: Int, at point: NSPoint, count: Int, fill: NSColor, empty: NSColor) {
+    private func drawBlockBar(percent: Int, at point: NSPoint, count: Int, fill: NSColor, empty: NSColor, fontSize: CGFloat = 12) {
         let filled = Int((Double(percent) / 100 * Double(count)).rounded())
         let on = String(repeating: "█", count: max(0, min(filled, count)))
         let off = String(repeating: "░", count: max(0, count - filled))
-        drawText(on, at: point, attrs: attrs(size: 12, weight: .regular, color: fill, mono: true))
-        let onWidth = on.size(withAttributes: attrs(size: 12, weight: .regular, color: fill, mono: true)).width
-        drawText(off, at: NSPoint(x: point.x + onWidth, y: point.y), attrs: attrs(size: 12, weight: .regular, color: empty, mono: true))
+        let barAttrs = attrs(size: fontSize, weight: .regular, color: fill, mono: true)
+        drawText(on, at: point, attrs: barAttrs)
+        let onWidth = on.size(withAttributes: barAttrs).width
+        drawText(off, at: NSPoint(x: point.x + onWidth, y: point.y), attrs: attrs(size: fontSize, weight: .regular, color: empty, mono: true))
     }
 
     private func drawDottedTrack(in rect: NSRect, tokens: WidgetTokens) {
