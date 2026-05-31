@@ -143,9 +143,11 @@ final class ClaudeRateLimitReader {
     }
 
     private func statusLineSnapshot() -> ClaudeRowsSnapshot? {
+        var latestSnapshot: ClaudeRowsSnapshot?
+
         for file in VibeGaugePaths.claudeStatusFiles(fileManager: fileManager) {
             capturedAt = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-                ?? Date()
+                ?? .distantPast
 
             guard let data = try? Data(contentsOf: file),
                   let object = try? JSONSerialization.jsonObject(with: data),
@@ -165,11 +167,14 @@ final class ClaudeRateLimitReader {
             }
 
             if !rows.isEmpty {
-                return ClaudeRowsSnapshot(rows: rows, modified: capturedAt)
+                let snapshot = ClaudeRowsSnapshot(rows: rows, modified: capturedAt)
+                if latestSnapshot == nil || snapshot.modified > latestSnapshot!.modified {
+                    latestSnapshot = snapshot
+                }
             }
         }
 
-        return nil
+        return latestSnapshot
     }
 
     func sourceSignature() -> String {
@@ -579,6 +584,7 @@ final class ClaudeUsageCacheReader {
 
 private struct CodexLogEvent: Decodable {
     let timestamp: String?
+    let rate_limits: CodexRateLimits?
     let payload: CodexPayload?
 }
 
@@ -721,7 +727,7 @@ final class CodexRateLimitReader {
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
             if let eventData = String(line).data(using: .utf8),
                let event = try? decoder.decode(CodexLogEvent.self, from: eventData),
-               let limits = event.payload?.rate_limits,
+               let limits = event.rate_limits ?? event.payload?.rate_limits,
                let timestamp = parseTimestamp(event.timestamp) {
                 return CodexRateLimitSnapshot(limits: limits, timestamp: timestamp, sourceCwd: sourceCwd)
             }
