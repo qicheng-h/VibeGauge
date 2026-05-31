@@ -1,22 +1,26 @@
 # VibeGauge
 
+<p>
+  <img src="docs/assets/vibegauge-icon.png" alt="VibeGauge app icon" width="96" height="96">
+</p>
+
 A compact native macOS desktop widget for tracking Claude Code and OpenAI Codex quota usage.
 
 ## Quick Start
 
-Build the app:
+Download the latest `VibeGauge.zip` from GitHub Releases, unzip it, then double-click:
 
-```sh
-./build-widget.sh
+```text
+VibeGauge.app
 ```
 
-Open it:
+You can also launch it from Terminal:
 
 ```sh
 open "VibeGauge.app"
 ```
 
-You can also double-click `VibeGauge.app` in Finder.
+End users do not need to build the app from source.
 
 ## What It Does
 
@@ -63,6 +67,16 @@ The wrapper preserves your existing status line command and writes the latest st
 ```
 
 Restart Claude Code or open a new Claude Code session after installing this wrapper. Already-running sessions may keep the old status line command and will not update the capture file.
+
+## Build From Source
+
+If you want to build VibeGauge locally instead of downloading a release:
+
+```sh
+./build-widget.sh
+```
+
+The script creates `VibeGauge.app` in the project folder.
 
 ## Controls
 
