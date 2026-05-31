@@ -45,9 +45,16 @@ Controls:
 - Click `r` to refresh live quota data.
 - Drag the dotted handle at the top center to move the widget.
 - Hold `Command` or `Option` and drag anywhere on the widget to move it.
-- Right-click the widget to refresh or quit.
+- Right-click the widget to switch style, switch light/dark appearance, refresh, or quit.
 - Press `Esc` while the widget is focused to quit.
 - The widget redraws countdowns every 30 seconds and checks source-file changes every two minutes.
+
+Styles:
+
+- `Native`: macOS glass-style panel.
+- `Mono`: dense terminal-style text panel.
+- `Playful`: rounded card layout.
+- `Terminal`: retro sage/phosphor layout.
 
 Data sources:
 

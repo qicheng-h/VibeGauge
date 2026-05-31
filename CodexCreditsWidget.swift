@@ -703,14 +703,164 @@ final class CodexRateLimitReader {
     }
 }
 
+private enum WidgetStyle: String, CaseIterable {
+    case native
+    case mono
+    case playful
+    case terminal
+
+    var title: String {
+        switch self {
+        case .native: return "Native"
+        case .mono: return "Mono"
+        case .playful: return "Playful"
+        case .terminal: return "Terminal"
+        }
+    }
+
+    var size: NSSize {
+        switch self {
+        case .native: return NSSize(width: 348, height: 166)
+        case .mono: return NSSize(width: 330, height: 158)
+        case .playful: return NSSize(width: 360, height: 226)
+        case .terminal: return NSSize(width: 326, height: 148)
+        }
+    }
+}
+
+private enum WidgetAppearance: String, CaseIterable {
+    case light
+    case dark
+
+    var title: String {
+        switch self {
+        case .light: return "Light"
+        case .dark: return "Dark"
+        }
+    }
+}
+
+private struct WidgetTokens {
+    let text: NSColor
+    let muted: NSColor
+    let faint: NSColor
+    let track: NSColor
+    let hair: NSColor
+    let claude: NSColor
+    let codex: NSColor
+    let warn: NSColor
+    let nativeBackground: NSColor
+    let nativeBorder: NSColor
+    let monoBackground: NSColor
+    let monoBorder: NSColor
+    let playBackground: NSColor
+    let playBorder: NSColor
+    let controlBackground: NSColor
+    let controlBorder: NSColor
+    let controlOn: NSColor
+    let termBackgroundTop: NSColor
+    let termBackgroundBottom: NSColor
+    let termBorder: NSColor
+    let termText: NSColor
+    let termDim: NSColor
+    let termFaint: NSColor
+    let termTrack: NSColor
+    let termDot: NSColor
+    let termFill: NSColor
+    let termWarn: NSColor
+    let termHair: NSColor
+
+    static func make(_ appearance: WidgetAppearance) -> WidgetTokens {
+        switch appearance {
+        case .light:
+            return WidgetTokens(
+                text: .hex(0x1b1d24),
+                muted: .hex(0x1b1d24, alpha: 0.52),
+                faint: .hex(0x1b1d24, alpha: 0.34),
+                track: .hex(0x14161e, alpha: 0.10),
+                hair: .hex(0x14161e, alpha: 0.10),
+                claude: .hex(0xb86d36),
+                codex: .hex(0x4fa88d),
+                warn: .hex(0xb85630),
+                nativeBackground: .white.withAlphaComponent(0.58),
+                nativeBorder: .white.withAlphaComponent(0.85),
+                monoBackground: .hex(0xfcfbf9, alpha: 0.86),
+                monoBorder: .hex(0x14161e, alpha: 0.10),
+                playBackground: .white,
+                playBorder: .hex(0x14161e, alpha: 0.07),
+                controlBackground: .hex(0x14161e, alpha: 0.05),
+                controlBorder: .hex(0x14161e, alpha: 0.10),
+                controlOn: .hex(0x14161e, alpha: 0.14),
+                termBackgroundTop: .hex(0xe8e9d8),
+                termBackgroundBottom: .hex(0xdde0cb),
+                termBorder: .hex(0x9aa888),
+                termText: .hex(0x3b4230),
+                termDim: .hex(0x6f7860),
+                termFaint: .hex(0x97a085),
+                termTrack: .hex(0xd2d6bf),
+                termDot: .hex(0xb9c0a3),
+                termFill: .hex(0x5b6347),
+                termWarn: .hex(0x9a4a2f),
+                termHair: .hex(0xc2c8ad)
+            )
+        case .dark:
+            return WidgetTokens(
+                text: .hex(0xf3f4f8),
+                muted: .hex(0xf3f4f8, alpha: 0.58),
+                faint: .hex(0xf3f4f8, alpha: 0.38),
+                track: .white.withAlphaComponent(0.13),
+                hair: .white.withAlphaComponent(0.10),
+                claude: .hex(0xc57a40),
+                codex: .hex(0x5eb79d),
+                warn: .hex(0xd07a4a),
+                nativeBackground: .hex(0x262834, alpha: 0.52),
+                nativeBorder: .white.withAlphaComponent(0.14),
+                monoBackground: .hex(0x121216, alpha: 0.80),
+                monoBorder: .white.withAlphaComponent(0.10),
+                playBackground: .hex(0x23252f),
+                playBorder: .white.withAlphaComponent(0.08),
+                controlBackground: .white.withAlphaComponent(0.07),
+                controlBorder: .white.withAlphaComponent(0.14),
+                controlOn: .white.withAlphaComponent(0.20),
+                termBackgroundTop: .hex(0x1c1f17),
+                termBackgroundBottom: .hex(0x15180f),
+                termBorder: .hex(0x4a5340),
+                termText: .hex(0xc3cda6),
+                termDim: .hex(0x8b9670),
+                termFaint: .hex(0x69734f),
+                termTrack: .hex(0x242a1b),
+                termDot: .hex(0x39402a),
+                termFill: .hex(0x9aac72),
+                termWarn: .hex(0xd07a4a),
+                termHair: .hex(0x333a26)
+            )
+        }
+    }
+}
+
+private extension NSColor {
+    static func hex(_ rgb: Int, alpha: CGFloat = 1) -> NSColor {
+        NSColor(
+            calibratedRed: CGFloat((rgb >> 16) & 0xff) / 255,
+            green: CGFloat((rgb >> 8) & 0xff) / 255,
+            blue: CGFloat(rgb & 0xff) / 255,
+            alpha: alpha
+        )
+    }
+}
+
 final class WidgetView: NSView {
     private static let alwaysOnTopKey = "alwaysOnTop"
+    private static let styleKey = "cw-style"
+    private static let appearanceKey = "cw-theme"
     private let store = CreditStore()
     private var creditData: CreditData
     private var timer: Timer?
     private var sourceCheckCounter = 0
     private var sourceSignature: String
     private var alwaysOnTop: Bool
+    private var widgetStyle: WidgetStyle
+    private var widgetAppearance: WidgetAppearance
     private var screenRect: NSRect = .zero
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -724,6 +874,8 @@ final class WidgetView: NSView {
         self.creditData = store.load()
         self.sourceSignature = store.sourceSignature()
         self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? false
+        self.widgetStyle = Self.storedStyle()
+        self.widgetAppearance = Self.storedAppearance()
         super.init(frame: frameRect)
         wantsLayer = true
         let refreshTimer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
@@ -737,6 +889,8 @@ final class WidgetView: NSView {
         self.creditData = store.load()
         self.sourceSignature = store.sourceSignature()
         self.alwaysOnTop = UserDefaults.standard.object(forKey: Self.alwaysOnTopKey) as? Bool ?? false
+        self.widgetStyle = Self.storedStyle()
+        self.widgetAppearance = Self.storedAppearance()
         super.init(coder: coder)
     }
 
@@ -748,6 +902,20 @@ final class WidgetView: NSView {
         creditData = store.load()
         sourceSignature = store.sourceSignature()
         needsDisplay = true
+    }
+
+    static var initialSize: NSSize {
+        storedStyle().size
+    }
+
+    private static func storedStyle() -> WidgetStyle {
+        let raw = UserDefaults.standard.string(forKey: styleKey) ?? WidgetStyle.native.rawValue
+        return WidgetStyle(rawValue: raw) ?? .native
+    }
+
+    private static func storedAppearance() -> WidgetAppearance {
+        let raw = UserDefaults.standard.string(forKey: appearanceKey) ?? WidgetAppearance.dark.rawValue
+        return WidgetAppearance(rawValue: raw) ?? .dark
     }
 
     private func automaticRefresh() {
@@ -770,10 +938,40 @@ final class WidgetView: NSView {
         let topItem = NSMenuItem(title: "Always on Top", action: #selector(toggleAlwaysOnTop), keyEquivalent: "t")
         topItem.state = alwaysOnTop ? .on : .off
         menu.addItem(topItem)
+        menu.addItem(styleMenuItem())
+        menu.addItem(appearanceMenuItem())
         menu.addItem(withTitle: "Refresh", action: #selector(reloadFromMenu), keyEquivalent: "r")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         NSMenu.popUpContextMenu(menu, with: event, for: self)
+    }
+
+    private func styleMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Style", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for (index, style) in WidgetStyle.allCases.enumerated() {
+            let child = NSMenuItem(title: style.title, action: #selector(selectStyleFromMenu(_:)), keyEquivalent: "")
+            child.target = self
+            child.tag = index
+            child.state = widgetStyle == style ? .on : .off
+            submenu.addItem(child)
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    private func appearanceMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Appearance", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        for (index, appearance) in WidgetAppearance.allCases.enumerated() {
+            let child = NSMenuItem(title: appearance.title, action: #selector(selectAppearanceFromMenu(_:)), keyEquivalent: "")
+            child.target = self
+            child.tag = index
+            child.state = widgetAppearance == appearance ? .on : .off
+            submenu.addItem(child)
+        }
+        item.submenu = submenu
+        return item
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -806,6 +1004,41 @@ final class WidgetView: NSView {
         reload()
     }
 
+    @objc private func selectStyleFromMenu(_ sender: NSMenuItem) {
+        guard WidgetStyle.allCases.indices.contains(sender.tag) else {
+            return
+        }
+
+        widgetStyle = WidgetStyle.allCases[sender.tag]
+        UserDefaults.standard.set(widgetStyle.rawValue, forKey: Self.styleKey)
+        resizeWindowForCurrentStyle()
+        needsDisplay = true
+    }
+
+    @objc private func selectAppearanceFromMenu(_ sender: NSMenuItem) {
+        guard WidgetAppearance.allCases.indices.contains(sender.tag) else {
+            return
+        }
+
+        widgetAppearance = WidgetAppearance.allCases[sender.tag]
+        UserDefaults.standard.set(widgetAppearance.rawValue, forKey: Self.appearanceKey)
+        needsDisplay = true
+    }
+
+    private func resizeWindowForCurrentStyle() {
+        guard let window else {
+            setFrameSize(widgetStyle.size)
+            return
+        }
+
+        let oldFrame = window.frame
+        var frame = oldFrame
+        frame.size = widgetStyle.size
+        frame.origin.y = oldFrame.maxY - frame.height
+        window.setFrame(frame, display: true, animate: false)
+        setFrameSize(widgetStyle.size)
+    }
+
     @objc private func toggleAlwaysOnTop() {
         alwaysOnTop.toggle()
         UserDefaults.standard.set(alwaysOnTop, forKey: Self.alwaysOnTopKey)
@@ -833,30 +1066,35 @@ final class WidgetView: NSView {
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
 
-        let caseBounds = self.bounds.insetBy(dx: 7, dy: 7)
-        drawCase(in: caseBounds)
-
-        let screen = caseBounds.insetBy(dx: 7, dy: 7)
-        screenRect = screen
-        drawLCD(in: screen)
-        drawDragHandle()
-        drawWindowButtons()
-        drawContent(in: screen.insetBy(dx: 10, dy: 8))
+        let tokens = WidgetTokens.make(widgetAppearance)
+        switch widgetStyle {
+        case .native:
+            drawNativeWidget(in: bounds, tokens: tokens)
+        case .mono:
+            drawMonoWidget(in: bounds, tokens: tokens)
+        case .playful:
+            drawPlayfulWidget(in: bounds, tokens: tokens)
+        case .terminal:
+            drawTerminalWidget(in: bounds, tokens: tokens)
+        }
     }
 
     private var closeButtonRect: NSRect {
         let screen = activeScreenRect
-        return NSRect(x: screen.maxX - 18, y: screen.maxY - 20, width: 13, height: 13)
+        let size = controlSize
+        return NSRect(x: screen.maxX - size, y: screen.maxY - size, width: size, height: size)
     }
 
     private var refreshButtonRect: NSRect {
         let screen = activeScreenRect
-        return NSRect(x: screen.maxX - 36, y: screen.maxY - 20, width: 13, height: 13)
+        let size = controlSize
+        return NSRect(x: screen.maxX - size * 2 - controlGap, y: screen.maxY - size, width: size, height: size)
     }
 
     private var topButtonRect: NSRect {
         let screen = activeScreenRect
-        return NSRect(x: screen.maxX - 54, y: screen.maxY - 20, width: 13, height: 13)
+        let size = controlSize
+        return NSRect(x: screen.maxX - size * 3 - controlGap * 2, y: screen.maxY - size, width: size, height: size)
     }
 
     private var dragHandleRect: NSRect {
@@ -872,128 +1110,242 @@ final class WidgetView: NSView {
         return screenRect
     }
 
-    private func drawWindowButtons() {
-        let buttonAttrs = attrs(size: 8, weight: .bold, color: NSColor(calibratedWhite: 0.12, alpha: 1))
-
-        drawButton(rect: topButtonRect, label: "^", attrs: buttonAttrs, active: alwaysOnTop)
-        drawButton(rect: refreshButtonRect, label: "r", attrs: buttonAttrs)
-        drawButton(rect: closeButtonRect, label: "x", attrs: buttonAttrs)
-    }
-
-    private func drawDragHandle() {
-        let rect = dragHandleRect
-        NSColor(calibratedWhite: 0.12, alpha: 0.38).setFill()
-
-        for x in stride(from: rect.minX + 5, through: rect.maxX - 5, by: 7) {
-            NSBezierPath(ovalIn: NSRect(x: x, y: rect.midY - 1.2, width: 2.4, height: 2.4)).fill()
+    private var controlSize: CGFloat {
+        switch widgetStyle {
+        case .native: return 22
+        case .mono: return 18
+        case .playful: return 26
+        case .terminal: return 17
         }
     }
 
-    private func drawButton(rect: NSRect, label: String, attrs: [NSAttributedString.Key: Any], active: Bool = false) {
-        let path = NSBezierPath(ovalIn: rect)
-        let fill = active
-            ? NSColor(calibratedRed: 0.45, green: 0.52, blue: 0.39, alpha: 0.9)
-            : NSColor(calibratedRed: 0.68, green: 0.72, blue: 0.62, alpha: 0.75)
-        fill.setFill()
-        path.fill()
-        NSColor(calibratedWhite: 0.08, alpha: 0.45).setStroke()
-        path.stroke()
-
-        let size = label.size(withAttributes: attrs)
-        drawText(label, at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), attrs: attrs)
-    }
-
-    private func drawCase(in rect: NSRect) {
-        let casePath = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        NSGradient(colors: [
-            NSColor(calibratedRed: 0.88, green: 0.84, blue: 0.75, alpha: 1),
-            NSColor(calibratedRed: 0.62, green: 0.56, blue: 0.47, alpha: 1),
-        ])?.draw(in: casePath, angle: -35)
-
-        NSColor(calibratedWhite: 0.22, alpha: 0.35).setStroke()
-        casePath.lineWidth = 1.5
-        casePath.stroke()
-    }
-
-    private func drawLCD(in rect: NSRect) {
-        let path = NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5)
-        NSColor(calibratedRed: 0.72, green: 0.77, blue: 0.66, alpha: 1).setFill()
-        path.fill()
-
-        NSColor(calibratedWhite: 0.08, alpha: 0.45).setStroke()
-        path.lineWidth = 1.5
-        path.stroke()
-
-        NSColor(calibratedWhite: 0.0, alpha: 0.06).setStroke()
-        for y in stride(from: rect.minY + 3, through: rect.maxY - 3, by: 3) {
-            NSBezierPath.strokeLine(from: NSPoint(x: rect.minX + 2, y: y), to: NSPoint(x: rect.maxX - 2, y: y))
+    private var controlGap: CGFloat {
+        switch widgetStyle {
+        case .native: return 6
+        case .mono, .terminal: return 5
+        case .playful: return 7
         }
     }
 
-    private func drawContent(in rect: NSRect) {
-        let titleAttrs = attrs(size: 13, weight: .bold, color: .black)
-        let smallAttrs = attrs(size: 10.5, weight: .regular, color: NSColor(calibratedWhite: 0.13, alpha: 1))
-        let serviceAttrs = attrs(size: 10.5, weight: .semibold, color: NSColor(calibratedWhite: 0.25, alpha: 1))
+    private func drawNativeWidget(in rect: NSRect, tokens: WidgetTokens) {
+        screenRect = rect.insetBy(dx: 18, dy: 14)
+        drawRounded(rect, radius: 20, fill: tokens.nativeBackground, stroke: tokens.nativeBorder)
+        drawHeader(in: screenRect, tokens: tokens, titleSize: 14.5, timePrefix: "")
 
-        drawText("Plan Usage", at: NSPoint(x: rect.minX, y: rect.maxY - 15), attrs: titleAttrs)
-        let time = dateFormatter.string(from: Date())
-        let timeSize = time.size(withAttributes: smallAttrs)
-        drawText(time, at: NSPoint(x: rect.maxX - timeSize.width - 62, y: rect.maxY - 14), attrs: smallAttrs)
-
-        var y = rect.maxY - 34
-        for (serviceIndex, service) in creditData.services.enumerated() {
-            if serviceIndex > 0 {
-                drawDashedLine(y: y + 14, from: rect.minX, to: rect.maxX)
-            }
-
-            drawText(service.name, at: NSPoint(x: rect.minX, y: y), attrs: serviceAttrs)
-            y -= 18
+        var y = screenRect.maxY - 42
+        for service in creditData.services {
+            let accent = accent(for: service, tokens: tokens)
+            drawSwatch(at: NSPoint(x: screenRect.minX, y: y + 4), color: accent)
+            drawText(service.name, at: NSPoint(x: screenRect.minX + 15, y: y), attrs: attrs(size: 12.5, weight: .bold, color: tokens.text, mono: false))
+            y -= 23
 
             for row in service.rows {
-                drawRow(row, y: y, rect: rect, attrs: smallAttrs)
-                y -= 19
+                drawLinearRow(row, y: y, rect: screenRect, tokens: tokens, accent: accent, height: 6, radius: 4, showPercentSymbol: true)
+                y -= 24
             }
-
-            y -= 8
+            y -= 5
         }
     }
 
-    private func drawRow(_ row: CreditRow, y: CGFloat, rect: NSRect, attrs: [NSAttributedString.Key: Any]) {
-        let labelWidth: CGFloat = 27
+    private func drawMonoWidget(in rect: NSRect, tokens: WidgetTokens) {
+        screenRect = rect.insetBy(dx: 16, dy: 13)
+        drawRounded(rect, radius: 11, fill: tokens.monoBackground, stroke: tokens.monoBorder)
+        drawHeader(in: screenRect, tokens: tokens, titleSize: 12, timePrefix: "", title: "plan_usage", mono: true)
+
+        var y = screenRect.maxY - 39
+        for service in creditData.services {
+            let accent = accent(for: service, tokens: tokens)
+            drawText(shortName(for: service).lowercased() + " >", at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 12, weight: .bold, color: accent, mono: true))
+            y -= 20
+            for row in service.rows {
+                drawMonoRow(row, y: y, rect: screenRect, tokens: tokens, accent: accent)
+                y -= 21
+            }
+            y -= 5
+        }
+    }
+
+    private func drawPlayfulWidget(in rect: NSRect, tokens: WidgetTokens) {
+        screenRect = rect.insetBy(dx: 14, dy: 14)
+        drawRounded(rect, radius: 24, fill: tokens.playBackground, stroke: tokens.playBorder)
+        drawHeader(in: screenRect.insetBy(dx: 4, dy: 2), tokens: tokens, titleSize: 16, timePrefix: "", mono: false)
+
+        var y = screenRect.maxY - 55
+        let cardHeight: CGFloat = 73
+        for service in creditData.services {
+            let accent = accent(for: service, tokens: tokens)
+            let card = NSRect(x: screenRect.minX, y: y - cardHeight + 18, width: screenRect.width, height: cardHeight)
+            drawRounded(card, radius: 16, fill: accent.withAlphaComponent(widgetAppearance == .light ? 0.10 : 0.18), stroke: .clear)
+            drawBadge(service, at: NSPoint(x: card.minX + 13, y: card.maxY - 31), color: accent)
+            drawText(service.name, at: NSPoint(x: card.minX + 43, y: card.maxY - 27), attrs: attrs(size: 14, weight: .heavy, color: tokens.text, mono: false))
+
+            var rowY = card.maxY - 48
+            for row in service.rows {
+                drawPlayfulRow(row, y: rowY, rect: card.insetBy(dx: 13, dy: 0), tokens: tokens, accent: accent)
+                rowY -= 31
+            }
+            y -= cardHeight + 10
+        }
+    }
+
+    private func drawTerminalWidget(in rect: NSRect, tokens: WidgetTokens) {
+        screenRect = rect.insetBy(dx: 13, dy: 11)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        NSGradient(colors: [tokens.termBackgroundTop, tokens.termBackgroundBottom])?.draw(in: path, angle: -35)
+        tokens.termBorder.setStroke()
+        path.stroke()
+        drawHeader(in: screenRect, tokens: tokens, titleSize: 13, timePrefix: "May 31 ", terminal: true)
+
+        var y = screenRect.maxY - 35
+        for (index, service) in creditData.services.enumerated() {
+            if index > 0 {
+                drawLine(y: y + 12, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
+            }
+            drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 11.5, weight: .bold, color: tokens.termDim, mono: true))
+            y -= 18
+            for row in service.rows {
+                drawTerminalRow(row, y: y, rect: screenRect, tokens: tokens)
+                y -= 20
+            }
+            y -= 4
+        }
+    }
+
+    private func drawHeader(in rect: NSRect, tokens: WidgetTokens, titleSize: CGFloat, timePrefix: String, title: String = "Plan Usage", mono: Bool = false, terminal: Bool = false) {
+        let text = terminal ? tokens.termText : tokens.text
+        let muted = terminal ? tokens.termDim : tokens.faint
+        drawText(title, at: NSPoint(x: rect.minX, y: rect.maxY - titleSize - 1), attrs: attrs(size: titleSize, weight: .heavy, color: text, mono: mono || terminal))
+        let time = timePrefix + shortTimeString()
+        let timeAttrs = attrs(size: terminal ? 11.5 : 11.5, weight: .semibold, color: muted, mono: mono || terminal)
+        let timeSize = time.size(withAttributes: timeAttrs)
+        drawText(time, at: NSPoint(x: topButtonRect.minX - timeSize.width - 10, y: rect.maxY - titleSize - 1), attrs: timeAttrs)
+        drawWindowButtons(tokens: tokens, terminal: terminal, mono: mono)
+    }
+
+    private func drawWindowButtons(tokens: WidgetTokens, terminal: Bool = false, mono: Bool = false) {
+        let color = terminal ? tokens.termDim : tokens.muted
+        let onColor = terminal ? tokens.termText : tokens.text
+        drawButton(rect: topButtonRect, label: "^", tokens: tokens, color: alwaysOnTop ? onColor : color, active: alwaysOnTop, terminal: terminal, square: mono)
+        drawButton(rect: refreshButtonRect, label: "r", tokens: tokens, color: color, terminal: terminal, square: mono)
+        drawButton(rect: closeButtonRect, label: "x", tokens: tokens, color: color, terminal: terminal, square: mono)
+    }
+
+    private func drawButton(rect: NSRect, label: String, tokens: WidgetTokens, color: NSColor, active: Bool = false, terminal: Bool = false, square: Bool = false) {
+        let fill = active ? tokens.controlOn : (terminal || square ? .clear : tokens.controlBackground)
+        let stroke = terminal ? tokens.termBorder : tokens.controlBorder
+        let path = NSBezierPath(roundedRect: rect, xRadius: square ? 5 : rect.width / 2, yRadius: square ? 5 : rect.height / 2)
+        fill.setFill()
+        path.fill()
+        stroke.setStroke()
+        path.stroke()
+        let buttonAttrs = attrs(size: rect.height <= 18 ? 8 : 9, weight: .bold, color: color, mono: true)
+        let size = label.size(withAttributes: buttonAttrs)
+        drawText(label, at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2), attrs: buttonAttrs)
+    }
+
+    private func drawLinearRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor, height: CGFloat, radius: CGFloat, showPercentSymbol: Bool) {
+        let labelWidth: CGFloat = 26
         let percentWidth: CGFloat = 38
-        let remainingWidth: CGFloat = 78
-        let gap: CGFloat = 6
+        let resetWidth: CGFloat = 52
+        let gap: CGFloat = 11
         let barX = rect.minX + labelWidth + gap
-        let barWidth = rect.width - labelWidth - percentWidth - remainingWidth - gap * 3
-        let barRect = NSRect(x: barX, y: y, width: barWidth, height: 13)
-
-        drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs)
-        drawBar(percent: row.percent, in: barRect)
-        drawText("\(row.percent)%", at: NSPoint(x: barRect.maxX + gap, y: y - 1), attrs: attrs)
-        drawText(row.remaining, at: NSPoint(x: rect.maxX - remainingWidth, y: y), attrs: attrs)
+        let barWidth = rect.width - labelWidth - percentWidth - resetWidth - gap * 3
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y - 4), attrs: attrs(size: 11.5, weight: .semibold, color: tokens.faint, mono: false))
+        drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), track: tokens.track, radius: radius)
+        let percent = showPercentSymbol ? "\(row.percent)%" : "\(row.percent)"
+        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 12, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
+        drawRight(row.remaining, x: rect.maxX, y: y - 5, width: resetWidth, attrs: attrs(size: 11, weight: .regular, color: tokens.muted, mono: false))
     }
 
-    private func drawBar(percent: Int, in rect: NSRect) {
-        NSColor(calibratedRed: 0.83, green: 0.87, blue: 0.78, alpha: 1).setFill()
+    private func drawMonoRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
+        let labelWidth: CGFloat = 30
+        let barWidth: CGFloat = 142
+        let barX = rect.minX + labelWidth + 11
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 12, weight: .regular, color: tokens.muted, mono: true))
+        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: 14, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
+        drawRight("\(row.percent)", x: barX + barWidth + 41, y: y, width: 30, attrs: attrs(size: 12, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
+        drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: 58, attrs: attrs(size: 12, weight: .regular, color: tokens.muted, mono: true))
+    }
+
+    private func drawPlayfulRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
+        let left = max(0, 100 - row.percent)
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 12, weight: .bold, color: tokens.muted, mono: false))
+        drawText("\(left)%", at: NSPoint(x: rect.maxX - 53, y: y), attrs: attrs(size: 13.5, weight: .heavy, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
+        drawText("left", at: NSPoint(x: rect.maxX - 22, y: y + 1), attrs: attrs(size: 10.5, weight: .bold, color: tokens.faint, mono: false))
+        let barRect = NSRect(x: rect.minX, y: y - 14, width: rect.width - 67, height: 9)
+        drawProgress(percent: row.percent, in: barRect, fill: fillColor(row.percent, accent: accent, warn: tokens.warn), track: tokens.track, radius: 6)
+        drawRight(row.remaining, x: rect.maxX, y: y - 17, width: 60, attrs: attrs(size: 11, weight: .bold, color: tokens.muted, mono: false))
+    }
+
+    private func drawTerminalRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens) {
+        let labelWidth: CGFloat = 24
+        let percentWidth: CGFloat = 40
+        let resetWidth: CGFloat = 52
+        let gap: CGFloat = 10
+        let barX = rect.minX + labelWidth + gap
+        let barWidth = rect.width - labelWidth - percentWidth - resetWidth - gap * 3
+        drawText(row.label, at: NSPoint(x: rect.minX, y: y - 1), attrs: attrs(size: 11.5, weight: .regular, color: tokens.termFaint, mono: true))
+        let bar = NSRect(x: barX, y: y, width: barWidth, height: 10)
+        drawDottedTrack(in: bar, tokens: tokens)
+        let fill = row.percent >= 95 ? tokens.termWarn : tokens.termFill
+        fill.setFill()
+        NSBezierPath(rect: NSRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(row.percent) / 100, height: bar.height)).fill()
+        tokens.termBorder.setStroke()
+        NSBezierPath(rect: bar).stroke()
+        drawRight("\(row.percent)%", x: bar.maxX + gap + percentWidth, y: y - 2, width: percentWidth, attrs: attrs(size: 11.5, weight: .bold, color: row.percent >= 95 ? tokens.termWarn : tokens.termText, mono: true))
+        drawRight(row.remaining, x: rect.maxX, y: y - 2, width: resetWidth, attrs: attrs(size: 11.5, weight: .regular, color: tokens.termDim, mono: true))
+    }
+
+    private func drawProgress(percent: Int, in rect: NSRect, fill: NSColor, track: NSColor, radius: CGFloat) {
+        drawRounded(rect, radius: radius, fill: track, stroke: .clear)
+        let width = rect.width * CGFloat(max(0, min(percent, 100))) / 100
+        if width > 0 {
+            drawRounded(NSRect(x: rect.minX, y: rect.minY, width: width, height: rect.height), radius: radius, fill: fill, stroke: .clear)
+        }
+    }
+
+    private func drawBlockBar(percent: Int, at point: NSPoint, count: Int, fill: NSColor, empty: NSColor) {
+        let filled = Int((Double(percent) / 100 * Double(count)).rounded())
+        let on = String(repeating: "█", count: max(0, min(filled, count)))
+        let off = String(repeating: "░", count: max(0, count - filled))
+        drawText(on, at: point, attrs: attrs(size: 12, weight: .regular, color: fill, mono: true))
+        let onWidth = on.size(withAttributes: attrs(size: 12, weight: .regular, color: fill, mono: true)).width
+        drawText(off, at: NSPoint(x: point.x + onWidth, y: point.y), attrs: attrs(size: 12, weight: .regular, color: empty, mono: true))
+    }
+
+    private func drawDottedTrack(in rect: NSRect, tokens: WidgetTokens) {
+        tokens.termTrack.setFill()
         NSBezierPath(rect: rect).fill()
-
-        let fillWidth = rect.width * CGFloat(max(0, min(percent, 100))) / 100
-        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: fillWidth, height: rect.height)
-        let fillColor = percent >= 95
-            ? NSColor(calibratedRed: 0.40, green: 0.22, blue: 0.18, alpha: 1)
-            : NSColor(calibratedRed: 0.14, green: 0.17, blue: 0.14, alpha: 1)
-        fillColor.setFill()
-        NSBezierPath(rect: fillRect).fill()
-
-        NSColor(calibratedWhite: 0.05, alpha: 0.65).setStroke()
-        NSBezierPath(rect: rect).stroke()
-
-        NSColor(calibratedWhite: 0.0, alpha: 0.35).setFill()
-        for x in stride(from: rect.minX + 4, through: rect.maxX - 2, by: 6) {
-            for y in stride(from: rect.minY + 3, through: rect.maxY - 2, by: 5) {
-                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: 1.1, height: 1.1)).fill()
+        tokens.termDot.setFill()
+        for x in stride(from: rect.minX + 2, through: rect.maxX - 2, by: 3) {
+            for y in stride(from: rect.minY + 2, through: rect.maxY - 2, by: 3) {
+                NSBezierPath(ovalIn: NSRect(x: x, y: y, width: 0.9, height: 0.9)).fill()
             }
         }
+    }
+
+    private func drawRounded(_ rect: NSRect, radius: CGFloat, fill: NSColor, stroke: NSColor) {
+        let path = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
+        fill.setFill()
+        path.fill()
+        if stroke.alphaComponent > 0 {
+            stroke.setStroke()
+            path.stroke()
+        }
+    }
+
+    private func drawSwatch(at point: NSPoint, color: NSColor) {
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: point.x, y: point.y, width: 8, height: 8), xRadius: 3, yRadius: 3).fill()
+    }
+
+    private func drawBadge(_ service: CreditService, at point: NSPoint, color: NSColor) {
+        color.setFill()
+        NSBezierPath(roundedRect: NSRect(x: point.x, y: point.y, width: 22, height: 22), xRadius: 7, yRadius: 7).fill()
+        let mark = service.name.contains("Codex") ? "#" : "C"
+        let markAttrs = attrs(size: 13, weight: .heavy, color: .white, mono: false)
+        let size = mark.size(withAttributes: markAttrs)
+        drawText(mark, at: NSPoint(x: point.x + 11 - size.width / 2, y: point.y + 11 - size.height / 2), attrs: markAttrs)
     }
 
     private func drawDashedLine(y: CGFloat, from minX: CGFloat, to maxX: CGFloat) {
@@ -1005,13 +1357,45 @@ final class WidgetView: NSView {
         line.stroke()
     }
 
+    private func drawLine(y: CGFloat, from minX: CGFloat, to maxX: CGFloat, color: NSColor) {
+        color.setStroke()
+        NSBezierPath.strokeLine(from: NSPoint(x: minX, y: y), to: NSPoint(x: maxX, y: y))
+    }
+
+    private func drawRight(_ text: String, x: CGFloat, y: CGFloat, width: CGFloat, attrs: [NSAttributedString.Key: Any]) {
+        let size = text.size(withAttributes: attrs)
+        drawText(text, at: NSPoint(x: x - max(width, size.width), y: y), attrs: attrs)
+    }
+
+    private func fillColor(_ percent: Int, accent: NSColor, warn: NSColor) -> NSColor {
+        percent >= 95 ? warn : accent
+    }
+
+    private func accent(for service: CreditService, tokens: WidgetTokens) -> NSColor {
+        service.name.contains("Codex") ? tokens.codex : tokens.claude
+    }
+
+    private func shortName(for service: CreditService) -> String {
+        service.name.contains("Codex") ? "Codex" : "Claude"
+    }
+
+    private func shortTimeString() -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "h:mm a"
+        return formatter.string(from: Date())
+    }
+
+    private func tightDuration(_ text: String) -> String {
+        text.replacingOccurrences(of: " ", with: "")
+    }
+
     private func drawText(_ text: String, at point: NSPoint, attrs: [NSAttributedString.Key: Any]) {
         text.draw(at: point, withAttributes: attrs)
     }
 
-    private func attrs(size: CGFloat, weight: NSFont.Weight, color: NSColor) -> [NSAttributedString.Key: Any] {
+    private func attrs(size: CGFloat, weight: NSFont.Weight, color: NSColor, mono: Bool = true) -> [NSAttributedString.Key: Any] {
         [
-            .font: NSFont.monospacedSystemFont(ofSize: size, weight: weight),
+            .font: mono ? NSFont.monospacedSystemFont(ofSize: size, weight: weight) : NSFont.systemFont(ofSize: size, weight: weight),
             .foregroundColor: color,
         ]
     }
@@ -1023,7 +1407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        let size = NSSize(width: 380, height: 176)
+        let size = WidgetView.initialSize
         let view = WidgetView(frame: NSRect(origin: .zero, size: size))
         let window = NSWindow(
             contentRect: view.frame,
