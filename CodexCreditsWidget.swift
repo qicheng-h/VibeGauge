@@ -34,7 +34,7 @@ final class CreditStore {
             CreditRow(label: "5h", percent: 0, remaining: "no data"),
             CreditRow(label: "7d", percent: 0, remaining: "no data"),
         ]),
-        CreditService(name: "OpenAI Codex", rows: [
+        CreditService(name: "Codex", rows: [
             CreditRow(label: "5h", percent: 0, remaining: "no data"),
             CreditRow(label: "7d", percent: 0, remaining: "no data"),
         ]),
@@ -1373,7 +1373,7 @@ final class WidgetView: NSView {
         for service in creditData.services {
             let accent = accent(for: service, tokens: tokens)
             drawSwatch(at: NSPoint(x: screenRect.minX, y: y + 3), color: accent, size: 7)
-            drawText(service.name, at: NSPoint(x: screenRect.minX + 12, y: y), attrs: attrs(size: 11.5, weight: .bold, color: tokens.text, mono: false))
+            drawText(displayName(for: service), at: NSPoint(x: screenRect.minX + 12, y: y), attrs: attrs(size: 11.5, weight: .bold, color: tokens.text, mono: false))
             y -= serviceNameToFirstRow
 
             for row in service.rows {
@@ -1391,7 +1391,7 @@ final class WidgetView: NSView {
         var y = screenRect.maxY - serviceStartOffset
         for service in creditData.services {
             let accent = accent(for: service, tokens: tokens)
-            drawText(shortName(for: service).lowercased() + " >", at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.8, weight: .bold, color: accent, mono: true))
+            drawText(displayName(for: service), at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.8, weight: .bold, color: accent, mono: true))
             y -= serviceNameToFirstRow
             for row in service.rows {
                 drawMonoRow(row, y: y, rect: screenRect, tokens: tokens, accent: accent)
@@ -1410,7 +1410,7 @@ final class WidgetView: NSView {
 
         var y = screenRect.maxY - serviceStartOffset
         for service in creditData.services {
-            drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
+            drawText(displayName(for: service), at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
             y -= serviceNameToFirstRow
             for row in service.rows {
                 drawTerminalRow(row, y: y, rect: screenRect, tokens: tokens)
@@ -1624,8 +1624,8 @@ final class WidgetView: NSView {
         service.name.contains("Codex") ? tokens.codex : tokens.claude
     }
 
-    private func shortName(for service: CreditService) -> String {
-        service.name.contains("Codex") ? "Codex" : "Claude"
+    private func displayName(for service: CreditService) -> String {
+        service.name.contains("Codex") ? "Codex" : "Claude Code"
     }
 
     private func shortTimeString() -> String {
