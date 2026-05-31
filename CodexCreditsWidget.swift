@@ -844,7 +844,7 @@ private enum WidgetStyle: String, CaseIterable {
     }
 
     var size: NSSize {
-        NSSize(width: 332, height: 152)
+        NSSize(width: 332, height: 180)
     }
 }
 
@@ -992,14 +992,15 @@ final class WidgetView: NSView {
         return formatter
     }()
     private let layoutInsetX: CGFloat = 14
-    private let layoutInsetY: CGFloat = 10
-    private let serviceStartOffset: CGFloat = 34
+    private let layoutInsetY: CGFloat = 13
+    private let serviceStartOffset: CGFloat = 36
     private let serviceNameToFirstRow: CGFloat = 17
     private let rowStep: CGFloat = 18
+    private let serviceGap: CGFloat = 10
     private let labelColumnWidth: CGFloat = 22
     private let percentColumnWidth: CGFloat = 34
-    private let resetColumnWidth: CGFloat = 44
-    private let columnGap: CGFloat = 8
+    private let resetColumnWidth: CGFloat = 50
+    private let columnGap: CGFloat = 10
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -1384,7 +1385,11 @@ final class WidgetView: NSView {
         drawHeader(in: screenRect, tokens: tokens, titleSize: 13.2, timePrefix: "")
 
         var y = screenRect.maxY - serviceStartOffset
-        for service in creditData.services {
+        for (index, service) in creditData.services.enumerated() {
+            if index > 0 {
+                y -= serviceGap
+            }
+
             let accent = accent(for: service, tokens: tokens)
             drawSwatch(at: NSPoint(x: screenRect.minX, y: y + 3), color: accent, size: 7)
             drawText(displayName(for: service), at: NSPoint(x: screenRect.minX + 12, y: y), attrs: attrs(size: 11.5, weight: .bold, color: tokens.text, mono: false))
@@ -1403,7 +1408,11 @@ final class WidgetView: NSView {
         drawHeader(in: screenRect, tokens: tokens, titleSize: 11.2, timePrefix: "", title: "plan_usage", mono: true)
 
         var y = screenRect.maxY - serviceStartOffset
-        for service in creditData.services {
+        for (index, service) in creditData.services.enumerated() {
+            if index > 0 {
+                y -= serviceGap
+            }
+
             let accent = accent(for: service, tokens: tokens)
             drawText(displayName(for: service), at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.8, weight: .bold, color: accent, mono: true))
             y -= serviceNameToFirstRow
@@ -1423,7 +1432,11 @@ final class WidgetView: NSView {
         drawHeader(in: screenRect, tokens: tokens, titleSize: 11.5, timePrefix: "", terminal: true)
 
         var y = screenRect.maxY - serviceStartOffset
-        for service in creditData.services {
+        for (index, service) in creditData.services.enumerated() {
+            if index > 0 {
+                y -= serviceGap
+            }
+
             drawText(displayName(for: service), at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
             y -= serviceNameToFirstRow
             for row in service.rows {
