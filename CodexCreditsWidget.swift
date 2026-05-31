@@ -837,7 +837,7 @@ private enum WidgetStyle: String, CaseIterable {
     }
 
     var size: NSSize {
-        NSSize(width: 332, height: 172)
+        NSSize(width: 332, height: 166)
     }
 }
 
@@ -1542,7 +1542,7 @@ final class WidgetView: NSView {
         let percentRight = barX + barWidth + columnGap + percentColumnWidth
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
         drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
-        drawRight("\(row.percent)", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
+        drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
         drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: resetColumnWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
 
