@@ -10,7 +10,13 @@ Native macOS floating widget for Claude Code and OpenAI Codex quota windows.
 
 ## Claude Code Setup
 
-Claude Code exposes five-hour and seven-day quota windows through status line input. Install the capture wrapper once:
+The widget first tries to read Claude's own `/usage` response from the Claude desktop app HTTP cache. This does not read Claude cookies or tokens, but it does require `zstd` to decompress the cached response. On this machine Homebrew installs it at:
+
+```sh
+/opt/homebrew/bin/zstd
+```
+
+If no readable cache is available, the widget falls back to Claude Code status line input. Install the capture wrapper once:
 
 ```sh
 ./install-claude-statusline-capture.sh
@@ -46,5 +52,5 @@ Controls:
 Data sources:
 
 - Codex reads the latest `rate_limits` event from `~/.codex/sessions` and `~/.codex/archived_sessions`.
-- Claude Code reads current-session and weekly quota windows from `rate_limits` captured from status line input.
+- Claude Code reads current-session and weekly quota windows from Claude desktop's cached `/usage` response, then falls back to `rate_limits` captured from status line input.
 - Context-window usage is intentionally not used because it is not subscription quota.

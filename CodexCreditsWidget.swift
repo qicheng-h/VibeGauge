@@ -22,6 +22,7 @@ private struct ResetDisplay {
 }
 
 final class CreditStore {
+    private let claudeReader = ClaudeRateLimitReader()
     private let codexReader = CodexRateLimitReader()
     private let fallback = CreditData(services: [
         CreditService(name: "Claude Code", rows: [
@@ -37,7 +38,7 @@ final class CreditStore {
     func load() -> CreditData {
         var data = fallback
 
-        if let claudeRows = ClaudeRateLimitReader().loadRows() {
+        if let claudeRows = claudeReader.loadRows() {
             data.services[0].rows = claudeRows
         }
 
@@ -51,6 +52,7 @@ final class CreditStore {
     func sourceSignature() -> String {
         [
             fileSignature(fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/codex-credits-status.json")),
+            claudeReader.sourceSignature(),
             newestSignature(in: fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")),
             newestSignature(in: fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/archived_sessions")),
         ].joined(separator: "|")
@@ -101,9 +103,14 @@ final class CreditStore {
 
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
+    private let cacheReader = ClaudeUsageCacheReader()
     private var capturedAt: Date = .distantPast
 
     func loadRows() -> [CreditRow]? {
+        if let rows = cacheReader.loadRows() {
+            return rows
+        }
+
         let file = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/codex-credits-status.json")
 
@@ -128,6 +135,22 @@ final class ClaudeRateLimitReader {
         }
 
         return rows.isEmpty ? nil : rows
+    }
+
+    func sourceSignature() -> String {
+        cacheReader.sourceSignature() + "|" + fileSignature(
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/codex-credits-status.json")
+        )
+    }
+
+    private func fileSignature(_ url: URL) -> String {
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return "\(url.path):missing"
+        }
+
+        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let size = values.fileSize ?? 0
+        return "\(url.path):\(modified):\(size)"
     }
 
     private func firstLimit(in limits: [String: Any], keys: [String]) -> [String: Any]? {
@@ -307,6 +330,203 @@ final class ClaudeRateLimitReader {
         }
 
         return max(0, Int(target.timeIntervalSince(now)))
+    }
+}
+
+final class ClaudeUsageCacheReader {
+    private let fileManager = FileManager.default
+    private let maxCacheFileSize = 8 * 1024 * 1024
+    private let zstdMagic = Data([0x28, 0xb5, 0x2f, 0xfd])
+
+    func loadRows() -> [CreditRow]? {
+        for file in usageCacheFiles() {
+            guard let data = try? Data(contentsOf: file),
+                  data.count <= maxCacheFileSize,
+                  data.range(of: Data("claude.ai/api/organizations".utf8)) != nil,
+                  data.range(of: Data("/usage".utf8)) != nil,
+                  let payload = decodeCachedUsagePayload(from: data),
+                  let rows = rows(from: payload) else {
+                continue
+            }
+
+            return rows
+        }
+
+        return nil
+    }
+
+    func sourceSignature() -> String {
+        guard let file = usageCacheFiles().first,
+              let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return "claude-usage-cache:missing"
+        }
+
+        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(file.path):\(modified):\(values.fileSize ?? 0)"
+    }
+
+    private func usageCacheFiles() -> [URL] {
+        let root = fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/Cache/Cache_Data")
+        guard let enumerator = fileManager.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.contentModificationDateKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return []
+        }
+
+        var files: [(url: URL, modified: Date)] = []
+
+        for case let url as URL in enumerator {
+            guard let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey, .fileSizeKey]),
+                  values.isRegularFile == true,
+                  (values.fileSize ?? 0) <= maxCacheFileSize else {
+                continue
+            }
+
+            files.append((url, values.contentModificationDate ?? .distantPast))
+        }
+
+        return files
+            .sorted { $0.modified > $1.modified }
+            .prefix(200)
+            .map(\.url)
+    }
+
+    private func decodeCachedUsagePayload(from data: Data) -> [String: Any]? {
+        guard let magicRange = data.range(of: zstdMagic) else {
+            return nil
+        }
+
+        let httpMarker = Data("HTTP/1.1".utf8)
+        let searchStart = magicRange.upperBound
+        let searchRange = searchStart..<data.endIndex
+        let bodyEnd = data.range(of: httpMarker, options: [], in: searchRange)?.lowerBound ?? data.endIndex
+        guard bodyEnd > magicRange.lowerBound else {
+            return nil
+        }
+
+        let compressed = data.subdata(in: magicRange.lowerBound..<bodyEnd)
+        guard let jsonData = zstdDecode(compressed),
+              let object = try? JSONSerialization.jsonObject(with: jsonData) as? [String: Any] else {
+            return nil
+        }
+
+        return object
+    }
+
+    private func zstdDecode(_ data: Data) -> Data? {
+        guard let zstd = zstdExecutable() else {
+            return nil
+        }
+
+        let process = Process()
+        process.executableURL = zstd
+        process.arguments = ["-dc", "-"]
+
+        let input = Pipe()
+        let output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            input.fileHandleForWriting.write(data)
+            try input.fileHandleForWriting.close()
+            process.waitUntilExit()
+            let decoded = output.fileHandleForReading.readDataToEndOfFile()
+            return decoded.isEmpty ? nil : decoded
+        } catch {
+            return nil
+        }
+    }
+
+    private func zstdExecutable() -> URL? {
+        for path in ["/opt/homebrew/bin/zstd", "/usr/local/bin/zstd", "/usr/bin/zstd"] {
+            if fileManager.isExecutableFile(atPath: path) {
+                return URL(fileURLWithPath: path)
+            }
+        }
+
+        return nil
+    }
+
+    private func rows(from payload: [String: Any]) -> [CreditRow]? {
+        var rows: [CreditRow] = []
+
+        if let fiveHour = payload["five_hour"] as? [String: Any] {
+            rows.append(row(from: fiveHour, label: "5h"))
+        }
+
+        if let sevenDay = payload["seven_day"] as? [String: Any] {
+            rows.append(row(from: sevenDay, label: "7d"))
+        }
+
+        return rows.isEmpty ? nil : rows
+    }
+
+    private func row(from limit: [String: Any], label: String) -> CreditRow {
+        let percent = Int((number(limit["utilization"]) ?? 0).rounded())
+        let reset = resetDisplay(from: limit["resets_at"])
+
+        return CreditRow(
+            label: label,
+            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            remaining: reset.remaining
+        )
+    }
+
+    private func number(_ value: Any?) -> Double? {
+        if let value = value as? Double {
+            return value
+        }
+
+        if let value = value as? Int {
+            return Double(value)
+        }
+
+        if let value = value as? String {
+            return Double(value)
+        }
+
+        return nil
+    }
+
+    private func resetDisplay(from value: Any?) -> ResetDisplay {
+        guard let text = value as? String, let date = parseISODate(text) else {
+            return ResetDisplay(remaining: "no reset", expired: false)
+        }
+
+        let seconds = max(0, Int(date.timeIntervalSinceNow))
+        if seconds == 0 {
+            return ResetDisplay(remaining: "refreshing", expired: true)
+        }
+
+        return ResetDisplay(remaining: formatDuration(seconds: seconds), expired: false)
+    }
+
+    private func parseISODate(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) {
+            return date
+        }
+
+        return ISO8601DateFormatter().date(from: text)
+    }
+
+    private func formatDuration(seconds: Int) -> String {
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3600
+        let minutes = (seconds % 3600) / 60
+
+        if days > 0 {
+            return "\(days)d \(hours)h"
+        }
+
+        return "\(hours)h \(minutes)m"
     }
 }
 
