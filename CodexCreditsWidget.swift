@@ -109,21 +109,39 @@ final class CreditStore {
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
     private let cacheReader = ClaudeUsageCacheReader()
+    private let staleInterval: TimeInterval = 10 * 60
     private var capturedAt: Date = .distantPast
 
     func loadRows() -> [CreditRow]? {
         let cacheSnapshot = cacheReader.loadSnapshot()
         let statusSnapshot = statusLineSnapshot()
+        let selected: ClaudeRowsSnapshot?
 
         switch (cacheSnapshot, statusSnapshot) {
         case let (cache?, status?):
-            return status.modified >= cache.modified ? status.rows : cache.rows
+            selected = status.modified >= cache.modified ? status : cache
         case let (cache?, nil):
-            return cache.rows
+            selected = cache
         case let (nil, status?):
-            return status.rows
+            selected = status
         case (nil, nil):
+            selected = nil
+        }
+
+        guard let selected else {
             return nil
+        }
+
+        return isStale(selected) ? staleRows(from: selected.rows) : selected.rows
+    }
+
+    private func isStale(_ snapshot: ClaudeRowsSnapshot) -> Bool {
+        Date().timeIntervalSince(snapshot.modified) > staleInterval
+    }
+
+    private func staleRows(from rows: [CreditRow]) -> [CreditRow] {
+        rows.map { row in
+            CreditRow(label: row.label, percent: row.percent, remaining: "stale")
         }
     }
 
