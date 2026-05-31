@@ -27,6 +27,16 @@ fileprivate struct ClaudeRowsSnapshot {
     let modified: Date
 }
 
+fileprivate enum VibeGaugePaths {
+    static func claudeStatusFiles(fileManager: FileManager = .default) -> [URL] {
+        let claudeDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        return [
+            claudeDirectory.appendingPathComponent("vibegauge-status.json"),
+            claudeDirectory.appendingPathComponent("codex-credits-status.json"),
+        ]
+    }
+}
+
 final class CreditStore {
     private let claudeReader = ClaudeRateLimitReader()
     private let codexReader = CodexRateLimitReader()
@@ -59,7 +69,6 @@ final class CreditStore {
 
     func sourceSignature() -> String {
         [
-            fileSignature(fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/codex-credits-status.json")),
             claudeReader.sourceSignature(),
             newestSignature(in: fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")),
             newestSignature(in: fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/archived_sessions")),
@@ -134,36 +143,38 @@ final class ClaudeRateLimitReader {
     }
 
     private func statusLineSnapshot() -> ClaudeRowsSnapshot? {
-        let file = fileManager.homeDirectoryForCurrentUser
-            .appendingPathComponent(".claude/codex-credits-status.json")
+        for file in VibeGaugePaths.claudeStatusFiles(fileManager: fileManager) {
+            capturedAt = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? Date()
 
-        capturedAt = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
-            ?? Date()
+            guard let data = try? Data(contentsOf: file),
+                  let object = try? JSONSerialization.jsonObject(with: data),
+                  let root = object as? [String: Any],
+                  let limits = root["rate_limits"] as? [String: Any] else {
+                continue
+            }
 
-        guard let data = try? Data(contentsOf: file),
-              let object = try? JSONSerialization.jsonObject(with: data),
-              let root = object as? [String: Any],
-              let limits = root["rate_limits"] as? [String: Any] else {
-            return nil
+            var rows: [CreditRow] = []
+
+            if let current = firstLimit(in: limits, keys: ["current_session", "currentSession", "session", "five_hour", "fiveHour", "primary"]) {
+                rows.append(row(from: current, label: "5h"))
+            }
+
+            if let weekly = firstLimit(in: limits, keys: ["weekly", "weekly_limits", "weeklyLimits", "all_models", "allModels", "seven_day", "sevenDay", "secondary"]) {
+                rows.append(row(from: weekly, label: "7d"))
+            }
+
+            if !rows.isEmpty {
+                return ClaudeRowsSnapshot(rows: rows, modified: capturedAt)
+            }
         }
 
-        var rows: [CreditRow] = []
-
-        if let current = firstLimit(in: limits, keys: ["current_session", "currentSession", "session", "five_hour", "fiveHour", "primary"]) {
-            rows.append(row(from: current, label: "5h"))
-        }
-
-        if let weekly = firstLimit(in: limits, keys: ["weekly", "weekly_limits", "weeklyLimits", "all_models", "allModels", "seven_day", "sevenDay", "secondary"]) {
-            rows.append(row(from: weekly, label: "7d"))
-        }
-
-        return rows.isEmpty ? nil : ClaudeRowsSnapshot(rows: rows, modified: capturedAt)
+        return nil
     }
 
     func sourceSignature() -> String {
-        cacheReader.sourceSignature() + "|" + fileSignature(
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/codex-credits-status.json")
-        )
+        ([cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
+            .joined(separator: "|")
     }
 
     private func fileSignature(_ url: URL) -> String {

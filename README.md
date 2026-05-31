@@ -63,7 +63,7 @@ If no readable cache is available, the widget falls back to Claude Code status l
 The wrapper preserves your existing status line command and writes the latest status payload to:
 
 ```sh
-~/.claude/codex-credits-status.json
+~/.claude/vibegauge-status.json
 ```
 
 Restart Claude Code or open a new Claude Code session after installing this wrapper. Already-running sessions may keep the old status line command and will not update the capture file.
