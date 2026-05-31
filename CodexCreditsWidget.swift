@@ -186,7 +186,7 @@ final class ClaudeRateLimitReader {
 
         return CreditRow(
             label: label,
-            percent: max(0, min(percent, 100)),
+            percent: reset.expired ? 0 : max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -507,7 +507,7 @@ final class ClaudeUsageCacheReader {
 
         return CreditRow(
             label: label,
-            percent: max(0, min(percent, 100)),
+            percent: reset.expired ? 0 : max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -709,7 +709,7 @@ final class CodexRateLimitReader {
 
         return CreditRow(
             label: label,
-            percent: max(0, min(percent, 100)),
+            percent: reset.expired ? 0 : max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
