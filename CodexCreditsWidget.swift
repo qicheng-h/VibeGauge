@@ -1553,7 +1553,7 @@ final class WidgetView: NSView {
         let barX = rect.minX + labelWidth + gap
         let barWidth = progressBarWidth(in: rect)
         drawText(row.label, at: NSPoint(x: rect.minX, y: y - 4), attrs: attrs(size: 10.4, weight: .semibold, color: tokens.faint, mono: false))
-        drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), track: tokens.track, radius: radius)
+        drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(row.percent, tokens: tokens), track: tokens.track, radius: radius)
         let percent = showPercentSymbol ? "\(row.percent)%" : "\(row.percent)"
         drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 10.8, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
         drawRight(row.remaining, x: rect.maxX, y: y - 5, width: resetWidth, attrs: attrs(size: 9.8, weight: .regular, color: tokens.muted, mono: false))
@@ -1564,7 +1564,7 @@ final class WidgetView: NSView {
         let barWidth = progressBarWidth(in: rect)
         let percentRight = barX + barWidth + columnGap + percentColumnWidth
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
-        drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
+        drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, tokens: tokens), empty: tokens.track)
         drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
         drawRight(row.remaining, x: rect.maxX, y: y, width: resetColumnWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
@@ -1575,7 +1575,7 @@ final class WidgetView: NSView {
         drawText(row.label, at: NSPoint(x: rect.minX, y: y - 1), attrs: attrs(size: 10.4, weight: .regular, color: tokens.termFaint, mono: true))
         let bar = NSRect(x: barX, y: y, width: barWidth, height: 8)
         drawDottedTrack(in: bar, tokens: tokens)
-        let fill = row.percent >= 95 ? tokens.termWarn : tokens.termFill
+        let fill = fillColor(row.percent, tokens: tokens)
         fill.setFill()
         NSBezierPath(rect: NSRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(row.percent) / 100, height: bar.height)).fill()
         tokens.termBorder.setStroke()
@@ -1674,16 +1674,16 @@ final class WidgetView: NSView {
         drawText(text, at: NSPoint(x: x - max(width, size.width), y: y), attrs: attrs)
     }
 
-    private func fillColor(_ percent: Int, accent: NSColor, warn: NSColor) -> NSColor {
+    private func fillColor(_ percent: Int, tokens: WidgetTokens) -> NSColor {
         if percent >= 90 {
-            return warn
+            return tokens.warn
         }
 
         if percent > 50 {
-            return .hex(0xd8904d)
+            return .hex(0xe49a4b)
         }
 
-        return accent
+        return tokens.codex
     }
 
     private func accent(for service: CreditService, tokens: WidgetTokens) -> NSColor {
