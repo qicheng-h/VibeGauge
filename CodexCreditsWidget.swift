@@ -809,8 +809,17 @@ final class WidgetView: NSView {
     @objc private func toggleAlwaysOnTop() {
         alwaysOnTop.toggle()
         UserDefaults.standard.set(alwaysOnTop, forKey: Self.alwaysOnTopKey)
-        window?.level = alwaysOnTop ? .floating : .normal
+        if let window {
+            Self.applyWindowBehavior(to: window, alwaysOnTop: alwaysOnTop)
+        }
         needsDisplay = true
+    }
+
+    static func applyWindowBehavior(to window: NSWindow, alwaysOnTop: Bool) {
+        window.level = alwaysOnTop ? .floating : .normal
+        window.collectionBehavior = alwaysOnTop
+            ? [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+            : [.fullScreenAuxiliary]
     }
 
     override func keyDown(with event: NSEvent) {
@@ -1014,7 +1023,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        let view = WidgetView(frame: NSRect(x: 0, y: 0, width: 380, height: 176))
+        let size = NSSize(width: 380, height: 176)
+        let view = WidgetView(frame: NSRect(origin: .zero, size: size))
         let window = NSWindow(
             contentRect: view.frame,
             styleMask: [.borderless],
@@ -1026,14 +1036,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.backgroundColor = .clear
         window.hasShadow = true
         let alwaysOnTop = UserDefaults.standard.object(forKey: "alwaysOnTop") as? Bool ?? false
-        window.level = alwaysOnTop ? .floating : .normal
         window.isMovableByWindowBackground = true
-        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
-        window.setFrameAutosaveName("CodexCreditsWidget")
-        window.center()
+        WidgetView.applyWindowBehavior(to: window, alwaysOnTop: alwaysOnTop)
+        window.setFrame(topLeftFrame(for: size), display: true)
         window.makeKeyAndOrderFront(nil)
 
         self.window = window
+    }
+
+    private func topLeftFrame(for size: NSSize) -> NSRect {
+        let screen = NSScreen.main ?? NSScreen.screens.first
+        let visibleFrame = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let margin: CGFloat = 12
+
+        return NSRect(
+            x: visibleFrame.minX + margin,
+            y: visibleFrame.maxY - size.height - margin,
+            width: size.width,
+            height: size.height
+        )
     }
 }
 
