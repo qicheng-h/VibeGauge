@@ -124,8 +124,12 @@ final class ClaudeRateLimitReader {
     private var capturedAt: Date = .distantPast
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
-        let cacheSnapshot = cacheReader.loadSnapshot()
         let statusSnapshot = statusLineSnapshot()
+        if let statusSnapshot {
+            return statusSnapshot
+        }
+
+        let cacheSnapshot = cacheReader.loadSnapshot()
         let selected: ClaudeRowsSnapshot?
 
         switch (cacheSnapshot, statusSnapshot) {
@@ -395,7 +399,7 @@ final class ClaudeUsageCacheReader {
     }
 
     func sourceSignature() -> String {
-        guard let file = newestUsageCacheFile(),
+        guard let file = usageCacheFiles().first,
               let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
             return "claude-usage-cache:missing"
         }
@@ -1794,6 +1798,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             height: size.height
         )
     }
+}
+
+if CommandLine.arguments.contains("--debug-data") {
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    if let data = try? encoder.encode(CreditStore().load()),
+       let text = String(data: data, encoding: .utf8) {
+        print(text)
+    }
+    exit(0)
 }
 
 let app = NSApplication.shared
