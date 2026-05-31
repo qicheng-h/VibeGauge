@@ -1433,17 +1433,17 @@ final class WidgetView: NSView {
 
     private func drawMonoRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens, accent: NSColor) {
         let labelWidth: CGFloat = 24
-        let percentWidth: CGFloat = 22
+        let percentWidth: CGFloat = 26
         let resetWidth: CGFloat = 43
         let labelGap: CGFloat = 7
-        let percentGap: CGFloat = 6
+        let percentGap: CGFloat = 8
         let resetGap: CGFloat = 8
         let barX = rect.minX + labelWidth + labelGap
         let barWidth = rect.width - labelWidth - percentWidth - resetWidth - labelGap - percentGap - resetGap
         let percentRight = barX + barWidth + percentGap + percentWidth
         let resetRight = percentRight + resetGap + resetWidth
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
-        drawBlockBar(percent: row.percent, at: NSPoint(x: barX, y: y), count: max(12, Int(barWidth / 6.1)), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track, fontSize: 10.7)
+        drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
         drawRight("\(row.percent)", x: percentRight, y: y, width: percentWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
         drawRight(tightDuration(row.remaining), x: resetRight, y: y, width: resetWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
@@ -1483,6 +1483,20 @@ final class WidgetView: NSView {
         drawText(on, at: point, attrs: barAttrs)
         let onWidth = on.size(withAttributes: barAttrs).width
         drawText(off, at: NSPoint(x: point.x + onWidth, y: point.y), attrs: attrs(size: fontSize, weight: .regular, color: empty, mono: true))
+    }
+
+    private func drawSegmentBar(percent: Int, in rect: NSRect, count: Int, fill: NSColor, empty: NSColor) {
+        let clampedCount = max(1, count)
+        let filled = max(0, min(clampedCount, Int((Double(percent) / 100 * Double(clampedCount)).rounded())))
+        let gap: CGFloat = 1
+        let segmentWidth = max(1, (rect.width - CGFloat(clampedCount - 1) * gap) / CGFloat(clampedCount))
+
+        for index in 0..<clampedCount {
+            let x = rect.minX + CGFloat(index) * (segmentWidth + gap)
+            let segment = NSRect(x: x, y: rect.minY, width: segmentWidth, height: rect.height)
+            (index < filled ? fill : empty).setFill()
+            NSBezierPath(rect: segment).fill()
+        }
     }
 
     private func drawDottedTrack(in rect: NSRect, tokens: WidgetTokens) {
