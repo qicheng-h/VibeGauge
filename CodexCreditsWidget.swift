@@ -565,6 +565,7 @@ final class ClaudeUsageCacheReader {
 }
 
 private struct CodexLogEvent: Decodable {
+    let timestamp: String?
     let payload: CodexPayload?
 }
 
@@ -583,9 +584,20 @@ private struct CodexLimit: Decodable {
     let resets_at: TimeInterval?
 }
 
+private struct CodexRateLimitSnapshot {
+    let limits: CodexRateLimits
+    let timestamp: Date
+}
+
 final class CodexRateLimitReader {
     private let decoder = JSONDecoder()
     private let fileManager = FileManager.default
+    private let fractionalDateFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+    private let dateFormatter = ISO8601DateFormatter()
     private var cachedSignature: String?
     private var cachedLimits: CodexRateLimits?
 
@@ -624,13 +636,19 @@ final class CodexRateLimitReader {
             home.appendingPathComponent(".codex/archived_sessions"),
         ]
 
+        var latestSnapshot: CodexRateLimitSnapshot?
+
         for file in recentJSONLFiles(roots: roots) {
-            if let limits = latestRateLimits(in: file) {
-                return limits
+            guard let snapshot = latestRateLimits(in: file) else {
+                continue
+            }
+
+            if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
+                latestSnapshot = snapshot
             }
         }
 
-        return nil
+        return latestSnapshot?.limits
     }
 
     private func recentJSONLFiles(roots: [URL]) -> [URL] {
@@ -658,7 +676,7 @@ final class CodexRateLimitReader {
             .map(\.url)
     }
 
-    private func latestRateLimits(in file: URL) -> CodexRateLimits? {
+    private func latestRateLimits(in file: URL) -> CodexRateLimitSnapshot? {
         guard let data = tailData(from: file, maxBytes: 4 * 1024 * 1024) else {
             return nil
         }
@@ -668,12 +686,25 @@ final class CodexRateLimitReader {
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
             if let eventData = String(line).data(using: .utf8),
                let event = try? decoder.decode(CodexLogEvent.self, from: eventData),
-               let limits = event.payload?.rate_limits {
-                return limits
+               let limits = event.payload?.rate_limits,
+               let timestamp = parseTimestamp(event.timestamp) {
+                return CodexRateLimitSnapshot(limits: limits, timestamp: timestamp)
             }
         }
 
         return nil
+    }
+
+    private func parseTimestamp(_ text: String?) -> Date? {
+        guard let text else {
+            return nil
+        }
+
+        if let date = fractionalDateFormatter.date(from: text) {
+            return date
+        }
+
+        return dateFormatter.date(from: text)
     }
 
     private func tailData(from file: URL, maxBytes: UInt64) -> Data? {
