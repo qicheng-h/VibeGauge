@@ -1,4 +1,4 @@
-# Codex + Claude Credits Widget
+# VibeGauge
 
 Native macOS floating widget for Claude Code and OpenAI Codex quota windows.
 
@@ -33,10 +33,10 @@ Restart Claude Code or open a new Claude Code session after installing this wrap
 ## Run
 
 ```sh
-open "Codex Credits.app"
+open "VibeGauge.app"
 ```
 
-You can also double-click `Codex Credits.app` in Finder.
+You can also double-click `VibeGauge.app` in Finder.
 
 Controls:
 
