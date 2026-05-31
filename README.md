@@ -22,6 +22,8 @@ The wrapper preserves your existing status line command and writes the latest st
 ~/.claude/codex-credits-status.json
 ```
 
+Restart Claude Code or open a new Claude Code session after installing this wrapper. Already-running sessions may keep the old status line command and will not update the capture file.
+
 ## Run
 
 ```sh
