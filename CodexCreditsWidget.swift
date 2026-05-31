@@ -21,6 +21,11 @@ private struct ResetDisplay {
     let expired: Bool
 }
 
+fileprivate struct ClaudeRowsSnapshot {
+    let rows: [CreditRow]
+    let modified: Date
+}
+
 final class CreditStore {
     private let claudeReader = ClaudeRateLimitReader()
     private let codexReader = CodexRateLimitReader()
@@ -107,10 +112,22 @@ final class ClaudeRateLimitReader {
     private var capturedAt: Date = .distantPast
 
     func loadRows() -> [CreditRow]? {
-        if let rows = cacheReader.loadRows() {
-            return rows
-        }
+        let cacheSnapshot = cacheReader.loadSnapshot()
+        let statusSnapshot = statusLineSnapshot()
 
+        switch (cacheSnapshot, statusSnapshot) {
+        case let (cache?, status?):
+            return status.modified >= cache.modified ? status.rows : cache.rows
+        case let (cache?, nil):
+            return cache.rows
+        case let (nil, status?):
+            return status.rows
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    private func statusLineSnapshot() -> ClaudeRowsSnapshot? {
         let file = fileManager.homeDirectoryForCurrentUser
             .appendingPathComponent(".claude/codex-credits-status.json")
 
@@ -134,7 +151,7 @@ final class ClaudeRateLimitReader {
             rows.append(row(from: weekly, label: "7d"))
         }
 
-        return rows.isEmpty ? nil : rows
+        return rows.isEmpty ? nil : ClaudeRowsSnapshot(rows: rows, modified: capturedAt)
     }
 
     func sourceSignature() -> String {
@@ -338,7 +355,7 @@ final class ClaudeUsageCacheReader {
     private let maxCacheFileSize = 8 * 1024 * 1024
     private let zstdMagic = Data([0x28, 0xb5, 0x2f, 0xfd])
 
-    func loadRows() -> [CreditRow]? {
+    fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
         for file in usageCacheFiles() {
             guard let data = try? Data(contentsOf: file),
                   data.count <= maxCacheFileSize,
@@ -349,14 +366,16 @@ final class ClaudeUsageCacheReader {
                 continue
             }
 
-            return rows
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+                ?? .distantPast
+            return ClaudeRowsSnapshot(rows: rows, modified: modified)
         }
 
         return nil
     }
 
     func sourceSignature() -> String {
-        guard let file = usageCacheFiles().first,
+        guard let file = newestUsageCacheFile(),
               let values = try? file.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
             return "claude-usage-cache:missing"
         }
@@ -392,6 +411,21 @@ final class ClaudeUsageCacheReader {
             .sorted { $0.modified > $1.modified }
             .prefix(200)
             .map(\.url)
+    }
+
+    private func newestUsageCacheFile() -> URL? {
+        for file in usageCacheFiles() {
+            guard let data = try? Data(contentsOf: file),
+                  data.count <= maxCacheFileSize,
+                  data.range(of: Data("claude.ai/api/organizations".utf8)) != nil,
+                  data.range(of: Data("/usage".utf8)) != nil else {
+                continue
+            }
+
+            return file
+        }
+
+        return nil
     }
 
     private func decodeCachedUsagePayload(from data: Data) -> [String: Any]? {
