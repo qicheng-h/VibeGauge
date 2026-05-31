@@ -1566,7 +1566,7 @@ final class WidgetView: NSView {
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
         drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, accent: accent, warn: tokens.warn), empty: tokens.track)
         drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
-        drawRight(tightDuration(row.remaining), x: rect.maxX, y: y, width: resetColumnWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
+        drawRight(row.remaining, x: rect.maxX, y: y, width: resetColumnWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
 
     private func drawTerminalRow(_ row: CreditRow, y: CGFloat, rect: NSRect, tokens: WidgetTokens) {
@@ -1675,7 +1675,15 @@ final class WidgetView: NSView {
     }
 
     private func fillColor(_ percent: Int, accent: NSColor, warn: NSColor) -> NSColor {
-        percent >= 95 ? warn : accent
+        if percent >= 90 {
+            return warn
+        }
+
+        if percent > 50 {
+            return .hex(0xd8904d)
+        }
+
+        return accent
     }
 
     private func accent(for service: CreditService, tokens: WidgetTokens) -> NSColor {
@@ -1710,10 +1718,6 @@ final class WidgetView: NSView {
         let formatter = DateFormatter()
         formatter.dateFormat = "h:mm a"
         return formatter.string(from: Date())
-    }
-
-    private func tightDuration(_ text: String) -> String {
-        text.replacingOccurrences(of: " ", with: "")
     }
 
     private func drawText(_ text: String, at point: NSPoint, attrs: [NSAttributedString.Key: Any]) {
