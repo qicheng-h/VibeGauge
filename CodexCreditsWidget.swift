@@ -16,6 +16,11 @@ struct CreditRow: Codable {
     var remaining: String
 }
 
+private struct ResetDisplay {
+    let remaining: String
+    let expired: Bool
+}
+
 final class CreditStore {
     private let codexReader = CodexRateLimitReader()
     private let fallback = CreditData(services: [
@@ -137,9 +142,13 @@ final class ClaudeRateLimitReader {
 
     private func row(from limit: [String: Any], label: String) -> CreditRow {
         let percent = Int((number(in: limit, keys: ["used_percentage", "used_percent", "percent_used", "percentage", "used"]) ?? 0).rounded())
-        let remaining = resetLabel(from: limit)
+        let reset = resetDisplay(from: limit)
 
-        return CreditRow(label: label, percent: max(0, min(percent, 100)), remaining: remaining)
+        return CreditRow(
+            label: label,
+            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            remaining: reset.remaining
+        )
     }
 
     private func number(in object: [String: Any], keys: [String]) -> Double? {
@@ -160,7 +169,7 @@ final class ClaudeRateLimitReader {
         return nil
     }
 
-    private func resetLabel(from limit: [String: Any]) -> String {
+    private func resetDisplay(from limit: [String: Any]) -> ResetDisplay {
         if let seconds = number(in: limit, keys: ["reset_in_seconds", "seconds_until_reset", "remaining_seconds"]) {
             let resetAt = capturedAt.addingTimeInterval(seconds)
             return resetCountdown(until: resetAt.timeIntervalSince1970)
@@ -172,7 +181,7 @@ final class ClaudeRateLimitReader {
 
         for key in ["remaining", "reset_in", "resets_in", "reset_label", "resetLabel"] {
             if let value = limit[key] as? String, !value.isEmpty {
-                return normalizeDurationLabel(value)
+                return ResetDisplay(remaining: normalizeDurationLabel(value), expired: false)
             }
         }
 
@@ -182,16 +191,20 @@ final class ClaudeRateLimitReader {
                     return resetCountdown(until: date.timeIntervalSince1970)
                 }
 
-                return value
+                return ResetDisplay(remaining: value, expired: false)
             }
         }
 
-        return "no reset"
+        return ResetDisplay(remaining: "no reset", expired: false)
     }
 
-    private func resetCountdown(until timestamp: TimeInterval) -> String {
+    private func resetCountdown(until timestamp: TimeInterval) -> ResetDisplay {
         let seconds = max(0, Int(timestamp - Date().timeIntervalSince1970))
-        return countdown(seconds: seconds)
+        if seconds == 0 {
+            return ResetDisplay(remaining: "refreshing", expired: true)
+        }
+
+        return ResetDisplay(remaining: countdown(seconds: seconds), expired: false)
     }
 
     private func countdown(seconds: Int) -> String {
@@ -438,20 +451,24 @@ final class CodexRateLimitReader {
         }
 
         let percent = Int((limit.used_percent ?? 0).rounded())
-        let remaining = resetCountdown(until: limit.resets_at)
+        let reset = resetDisplay(until: limit.resets_at)
 
-        return CreditRow(label: label, percent: max(0, min(percent, 100)), remaining: remaining)
+        return CreditRow(
+            label: label,
+            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            remaining: reset.remaining
+        )
     }
 
-    private func resetCountdown(until timestamp: TimeInterval?) -> String {
+    private func resetDisplay(until timestamp: TimeInterval?) -> ResetDisplay {
         guard let timestamp else {
-            return "no reset"
+            return ResetDisplay(remaining: "no reset", expired: false)
         }
 
         let seconds = max(0, Int(timestamp - Date().timeIntervalSince1970))
 
         if seconds == 0 {
-            return "now"
+            return ResetDisplay(remaining: "refreshing", expired: true)
         }
 
         let days = seconds / 86_400
@@ -459,10 +476,10 @@ final class CodexRateLimitReader {
         let minutes = (seconds % 3600) / 60
 
         if days > 0 {
-            return "\(days)d \(hours)h"
+            return ResetDisplay(remaining: "\(days)d \(hours)h", expired: false)
         }
 
-        return "\(hours)h \(minutes)m"
+        return ResetDisplay(remaining: "\(hours)h \(minutes)m", expired: false)
     }
 }
 
@@ -694,8 +711,8 @@ final class WidgetView: NSView {
 
     private func drawRow(_ row: CreditRow, y: CGFloat, rect: NSRect, attrs: [NSAttributedString.Key: Any]) {
         let labelWidth: CGFloat = 27
-        let percentWidth: CGFloat = 39
-        let remainingWidth: CGFloat = 72
+        let percentWidth: CGFloat = 38
+        let remainingWidth: CGFloat = 78
         let gap: CGFloat = 6
         let barX = rect.minX + labelWidth + gap
         let barWidth = rect.width - labelWidth - percentWidth - remainingWidth - gap * 3
