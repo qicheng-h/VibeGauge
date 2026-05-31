@@ -8,6 +8,7 @@ struct CreditData: Codable {
 struct CreditService: Codable {
     var name: String
     var rows: [CreditRow]
+    var refreshedAt: Date? = nil
 }
 
 struct CreditRow: Codable {
@@ -43,12 +44,14 @@ final class CreditStore {
     func load() -> CreditData {
         var data = fallback
 
-        if let claudeRows = claudeReader.loadRows() {
-            data.services[0].rows = claudeRows
+        if let claudeSnapshot = claudeReader.loadSnapshot() {
+            data.services[0].rows = claudeSnapshot.rows
+            data.services[0].refreshedAt = claudeSnapshot.modified
         }
 
-        if let codexRows = codexReader.loadRows(signature: sourceSignature()) {
-            data.services[1].rows = codexRows
+        if let codexSnapshot = codexReader.loadSnapshot(signature: sourceSignature()) {
+            data.services[1].rows = codexSnapshot.rows
+            data.services[1].refreshedAt = codexSnapshot.modified
         }
 
         return data
@@ -109,10 +112,9 @@ final class CreditStore {
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
     private let cacheReader = ClaudeUsageCacheReader()
-    private let staleInterval: TimeInterval = 10 * 60
     private var capturedAt: Date = .distantPast
 
-    func loadRows() -> [CreditRow]? {
+    fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
         let cacheSnapshot = cacheReader.loadSnapshot()
         let statusSnapshot = statusLineSnapshot()
         let selected: ClaudeRowsSnapshot?
@@ -128,21 +130,7 @@ final class ClaudeRateLimitReader {
             selected = nil
         }
 
-        guard let selected else {
-            return nil
-        }
-
-        return isStale(selected) ? staleRows(from: selected.rows) : selected.rows
-    }
-
-    private func isStale(_ snapshot: ClaudeRowsSnapshot) -> Bool {
-        Date().timeIntervalSince(snapshot.modified) > staleInterval
-    }
-
-    private func staleRows(from rows: [CreditRow]) -> [CreditRow] {
-        rows.map { row in
-            CreditRow(label: row.label, percent: row.percent, remaining: "stale")
-        }
+        return selected
     }
 
     private func statusLineSnapshot() -> ClaudeRowsSnapshot? {
@@ -612,6 +600,11 @@ private struct CodexRateLimitSnapshot {
     let sourceCwd: String?
 }
 
+fileprivate struct CodexRowsSnapshot {
+    let rows: [CreditRow]
+    let modified: Date
+}
+
 final class CodexRateLimitReader {
     private let decoder = JSONDecoder()
     private let fileManager = FileManager.default
@@ -622,37 +615,37 @@ final class CodexRateLimitReader {
     }()
     private let dateFormatter = ISO8601DateFormatter()
     private var cachedSignature: String?
-    private var cachedLimits: CodexRateLimits?
+    private var cachedSnapshot: CodexRateLimitSnapshot?
 
-    func loadRows(signature: String) -> [CreditRow]? {
-        let limits: CodexRateLimits?
+    fileprivate func loadSnapshot(signature: String) -> CodexRowsSnapshot? {
+        let snapshot: CodexRateLimitSnapshot?
 
         if cachedSignature == signature {
-            limits = cachedLimits
+            snapshot = cachedSnapshot
         } else {
-            limits = latestRateLimits()
-            cachedLimits = limits
+            snapshot = latestRateLimits()
+            cachedSnapshot = snapshot
             cachedSignature = signature
         }
 
-        guard let limits else {
+        guard let snapshot else {
             return nil
         }
 
         var rows: [CreditRow] = []
 
-        if let primary = limits.primary {
+        if let primary = snapshot.limits.primary {
             rows.append(row(from: primary, fallbackLabel: "5h"))
         }
 
-        if let secondary = limits.secondary {
+        if let secondary = snapshot.limits.secondary {
             rows.append(row(from: secondary, fallbackLabel: "7d"))
         }
 
-        return rows.isEmpty ? nil : rows
+        return rows.isEmpty ? nil : CodexRowsSnapshot(rows: rows, modified: snapshot.timestamp)
     }
 
-    private func latestRateLimits() -> CodexRateLimits? {
+    private func latestRateLimits() -> CodexRateLimitSnapshot? {
         let home = fileManager.homeDirectoryForCurrentUser
         let roots = [
             home.appendingPathComponent(".codex/sessions"),
@@ -678,7 +671,7 @@ final class CodexRateLimitReader {
             }
         }
 
-        return (latestLocalSnapshot ?? latestSnapshot)?.limits
+        return latestLocalSnapshot ?? latestSnapshot
     }
 
     private func recentJSONLFiles(roots: [URL]) -> [URL] {
@@ -844,7 +837,7 @@ private enum WidgetStyle: String, CaseIterable {
     }
 
     var size: NSSize {
-        NSSize(width: 332, height: 180)
+        NSSize(width: 332, height: 172)
     }
 }
 
@@ -1392,7 +1385,7 @@ final class WidgetView: NSView {
 
             let accent = accent(for: service, tokens: tokens)
             drawSwatch(at: NSPoint(x: screenRect.minX, y: y + 3), color: accent, size: 7)
-            drawText(displayName(for: service), at: NSPoint(x: screenRect.minX + 12, y: y), attrs: attrs(size: 11.5, weight: .bold, color: tokens.text, mono: false))
+            drawServiceHeader(service, at: NSPoint(x: screenRect.minX + 12, y: y), tokens: tokens, nameSize: 11.5, nameColor: tokens.text, metaColor: tokens.faint, mono: false)
             y -= serviceNameToFirstRow
 
             for row in service.rows {
@@ -1414,7 +1407,7 @@ final class WidgetView: NSView {
             }
 
             let accent = accent(for: service, tokens: tokens)
-            drawText(displayName(for: service), at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.8, weight: .bold, color: accent, mono: true))
+            drawServiceHeader(service, at: NSPoint(x: screenRect.minX, y: y), tokens: tokens, nameSize: 10.8, nameColor: accent, metaColor: tokens.muted, mono: true)
             y -= serviceNameToFirstRow
             for row in service.rows {
                 drawMonoRow(row, y: y, rect: screenRect, tokens: tokens, accent: accent)
@@ -1437,13 +1430,28 @@ final class WidgetView: NSView {
                 y -= serviceGap
             }
 
-            drawText(displayName(for: service), at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
+            drawServiceHeader(service, at: NSPoint(x: screenRect.minX, y: y), tokens: tokens, nameSize: 10.6, nameColor: tokens.termDim, metaColor: tokens.termFaint, mono: true)
             y -= serviceNameToFirstRow
             for row in service.rows {
                 drawTerminalRow(row, y: y, rect: screenRect, tokens: tokens)
                 y -= rowStep
             }
         }
+    }
+
+    private func drawServiceHeader(_ service: CreditService, at point: NSPoint, tokens: WidgetTokens, nameSize: CGFloat, nameColor: NSColor, metaColor: NSColor, mono: Bool) {
+        let name = displayName(for: service)
+        let nameAttrs = attrs(size: nameSize, weight: .bold, color: nameColor, mono: mono)
+        drawText(name, at: point, attrs: nameAttrs)
+
+        guard let refreshedAt = service.refreshedAt else {
+            return
+        }
+
+        let meta = "refreshed \(relativeAge(from: refreshedAt))"
+        let nameWidth = name.size(withAttributes: nameAttrs).width
+        let metaAttrs = attrs(size: max(8.6, nameSize - 1.6), weight: .regular, color: metaColor, mono: mono)
+        drawText(meta, at: NSPoint(x: point.x + nameWidth + 8, y: point.y + 0.3), attrs: metaAttrs)
     }
 
     private func drawHeader(in rect: NSRect, tokens: WidgetTokens, titleSize: CGFloat, timePrefix: String, title: String = "Plan Usage", mono: Bool = false, terminal: Bool = false) {
@@ -1653,6 +1661,26 @@ final class WidgetView: NSView {
 
     private func displayName(for service: CreditService) -> String {
         service.name.contains("Codex") ? "Codex" : "Claude Code"
+    }
+
+    private func relativeAge(from date: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(date)))
+
+        if seconds < 60 {
+            return "just now"
+        }
+
+        let minutes = seconds / 60
+        if minutes < 60 {
+            return "\(minutes)m ago"
+        }
+
+        let hours = minutes / 60
+        if hours < 24 {
+            return "\(hours)h ago"
+        }
+
+        return "\(hours / 24)d ago"
     }
 
     private func shortTimeString() -> String {
