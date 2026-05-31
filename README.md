@@ -41,11 +41,12 @@ You can also double-click `Codex Credits.app` in Finder.
 Controls:
 
 - Click `x` on the widget to quit.
-- Click `T` to toggle always-on-top mode.
+- Click `^` to toggle always-on-top mode.
 - Click `r` to refresh live quota data.
+- Click the `n` / `m` / `p` / `t` style button to cycle Native, Mono, Playful, and Terminal layouts.
 - Drag the dotted handle at the top center to move the widget.
 - Hold `Command` or `Option` and drag anywhere on the widget to move it.
-- Right-click the widget to switch style, switch light/dark appearance, refresh, or quit.
+- Right-click the widget to choose an exact style, switch light/dark appearance, refresh, or quit.
 - Press `Esc` while the widget is focused to quit.
 - The widget redraws countdowns every 30 seconds and checks source-file changes every two minutes.
 

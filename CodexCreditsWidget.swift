@@ -720,10 +720,19 @@ private enum WidgetStyle: String, CaseIterable {
 
     var size: NSSize {
         switch self {
-        case .native: return NSSize(width: 348, height: 166)
-        case .mono: return NSSize(width: 330, height: 158)
+        case .native: return NSSize(width: 348, height: 222)
+        case .mono: return NSSize(width: 330, height: 198)
         case .playful: return NSSize(width: 360, height: 226)
-        case .terminal: return NSSize(width: 326, height: 148)
+        case .terminal: return NSSize(width: 326, height: 166)
+        }
+    }
+
+    var controlLabel: String {
+        switch self {
+        case .native: return "n"
+        case .mono: return "m"
+        case .playful: return "p"
+        case .terminal: return "t"
         }
     }
 }
@@ -982,6 +991,11 @@ final class WidgetView: NSView {
             return
         }
 
+        if styleButtonRect.contains(point) {
+            cycleStyle()
+            return
+        }
+
         if topButtonRect.contains(point) {
             toggleAlwaysOnTop()
             return
@@ -1002,6 +1016,15 @@ final class WidgetView: NSView {
 
     @objc private func reloadFromMenu() {
         reload()
+    }
+
+    private func cycleStyle() {
+        let styles = WidgetStyle.allCases
+        let index = styles.firstIndex(of: widgetStyle) ?? 0
+        widgetStyle = styles[(index + 1) % styles.count]
+        UserDefaults.standard.set(widgetStyle.rawValue, forKey: Self.styleKey)
+        resizeWindowForCurrentStyle()
+        needsDisplay = true
     }
 
     @objc private func selectStyleFromMenu(_ sender: NSMenuItem) {
@@ -1095,6 +1118,12 @@ final class WidgetView: NSView {
         let screen = activeScreenRect
         let size = controlSize
         return NSRect(x: screen.maxX - size * 3 - controlGap * 2, y: screen.maxY - size, width: size, height: size)
+    }
+
+    private var styleButtonRect: NSRect {
+        let screen = activeScreenRect
+        let size = controlSize
+        return NSRect(x: screen.maxX - size * 4 - controlGap * 3, y: screen.maxY - size, width: size, height: size)
     }
 
     private var dragHandleRect: NSRect {
@@ -1218,13 +1247,14 @@ final class WidgetView: NSView {
         let time = timePrefix + shortTimeString()
         let timeAttrs = attrs(size: terminal ? 11.5 : 11.5, weight: .semibold, color: muted, mono: mono || terminal)
         let timeSize = time.size(withAttributes: timeAttrs)
-        drawText(time, at: NSPoint(x: topButtonRect.minX - timeSize.width - 10, y: rect.maxY - titleSize - 1), attrs: timeAttrs)
+        drawText(time, at: NSPoint(x: styleButtonRect.minX - timeSize.width - 10, y: rect.maxY - titleSize - 1), attrs: timeAttrs)
         drawWindowButtons(tokens: tokens, terminal: terminal, mono: mono)
     }
 
     private func drawWindowButtons(tokens: WidgetTokens, terminal: Bool = false, mono: Bool = false) {
         let color = terminal ? tokens.termDim : tokens.muted
         let onColor = terminal ? tokens.termText : tokens.text
+        drawButton(rect: styleButtonRect, label: widgetStyle.controlLabel, tokens: tokens, color: onColor, active: false, terminal: terminal, square: mono)
         drawButton(rect: topButtonRect, label: "^", tokens: tokens, color: alwaysOnTop ? onColor : color, active: alwaysOnTop, terminal: terminal, square: mono)
         drawButton(rect: refreshButtonRect, label: "r", tokens: tokens, color: color, terminal: terminal, square: mono)
         drawButton(rect: closeButtonRect, label: "x", tokens: tokens, color: color, terminal: terminal, square: mono)
