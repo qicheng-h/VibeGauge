@@ -121,29 +121,17 @@ final class CreditStore {
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
     private let cacheReader = ClaudeUsageCacheReader()
+    private let freshStatusMaxAge: TimeInterval = 120
     private var capturedAt: Date = .distantPast
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
         let statusSnapshot = statusLineSnapshot()
-        if let statusSnapshot {
+        if let statusSnapshot, Date().timeIntervalSince(statusSnapshot.modified) <= freshStatusMaxAge {
             return statusSnapshot
         }
 
         let cacheSnapshot = cacheReader.loadSnapshot()
-        let selected: ClaudeRowsSnapshot?
-
-        switch (cacheSnapshot, statusSnapshot) {
-        case let (cache?, status?):
-            selected = status.modified >= cache.modified ? status : cache
-        case let (cache?, nil):
-            selected = cache
-        case let (nil, status?):
-            selected = status
-        case (nil, nil):
-            selected = nil
-        }
-
-        return selected
+        return cacheSnapshot ?? statusSnapshot
     }
 
     private func statusLineSnapshot() -> ClaudeRowsSnapshot? {
@@ -477,14 +465,24 @@ final class ClaudeUsageCacheReader {
             return nil
         }
 
+        let outputURL = fileManager.temporaryDirectory
+            .appendingPathComponent("vibegauge-zstd-\(UUID().uuidString).json")
+        guard fileManager.createFile(atPath: outputURL.path, contents: nil),
+              let outputHandle = try? FileHandle(forWritingTo: outputURL) else {
+            return nil
+        }
+        defer {
+            try? outputHandle.close()
+            try? fileManager.removeItem(at: outputURL)
+        }
+
         let process = Process()
         process.executableURL = zstd
         process.arguments = ["-dc", "-"]
 
         let input = Pipe()
-        let output = Pipe()
         process.standardInput = input
-        process.standardOutput = output
+        process.standardOutput = outputHandle
         process.standardError = Pipe()
 
         do {
@@ -492,7 +490,11 @@ final class ClaudeUsageCacheReader {
             input.fileHandleForWriting.write(data)
             try input.fileHandleForWriting.close()
             process.waitUntilExit()
-            let decoded = output.fileHandleForReading.readDataToEndOfFile()
+            guard process.terminationStatus == 0 else {
+                return nil
+            }
+
+            let decoded = (try? Data(contentsOf: outputURL)) ?? Data()
             return decoded.isEmpty ? nil : decoded
         } catch {
             return nil
