@@ -1330,18 +1330,11 @@ final class WidgetView: NSView {
         drawHeader(in: screenRect, tokens: tokens, titleSize: 11.5, timePrefix: "", terminal: true)
 
         var y = screenRect.maxY - serviceStartOffset
-        var previousBottom: CGFloat?
-        for (index, service) in creditData.services.enumerated() {
-            if index > 0 {
-                if let previousBottom {
-                    drawLine(y: (previousBottom + y) / 2, from: screenRect.minX, to: screenRect.maxX, color: tokens.termHair)
-                }
-            }
+        for service in creditData.services {
             drawText(service.name, at: NSPoint(x: screenRect.minX, y: y), attrs: attrs(size: 10.6, weight: .bold, color: tokens.termDim, mono: true))
             y -= serviceNameToFirstRow
             for row in service.rows {
                 drawTerminalRow(row, y: y, rect: screenRect, tokens: tokens)
-                previousBottom = y
                 y -= rowStep
             }
         }
