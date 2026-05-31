@@ -28,8 +28,12 @@ fileprivate struct ClaudeRowsSnapshot {
 }
 
 fileprivate enum VibeGaugePaths {
+    static func claudeDirectory(fileManager: FileManager = .default) -> URL {
+        fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+    }
+
     static func claudeStatusFiles(fileManager: FileManager = .default) -> [URL] {
-        let claudeDirectory = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
+        let claudeDirectory = claudeDirectory(fileManager: fileManager)
         return [
             claudeDirectory.appendingPathComponent("vibegauge-status.json"),
             claudeDirectory.appendingPathComponent("codex-credits-status.json"),
@@ -38,6 +42,7 @@ fileprivate enum VibeGaugePaths {
 }
 
 final class CreditStore {
+    private let installer = ClaudeStatusLineInstaller.shared
     private let claudeReader = ClaudeRateLimitReader()
     private let codexReader = CodexRateLimitReader()
     static let placeholder = CreditData(services: [
@@ -50,6 +55,10 @@ final class CreditStore {
             CreditRow(label: "7d", percent: 0, remaining: "no data"),
         ]),
     ])
+
+    init() {
+        installer.ensureInstalled()
+    }
 
     func load() -> CreditData {
         var data = Self.placeholder
@@ -115,6 +124,94 @@ final class CreditStore {
         }
 
         return newest.isEmpty ? "\(root.path):empty" : newest
+    }
+}
+
+final class ClaudeStatusLineInstaller {
+    static let shared = ClaudeStatusLineInstaller()
+
+    private let fileManager = FileManager.default
+    private let lock = NSLock()
+    private var didRun = false
+
+    func ensureInstalled() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !didRun else {
+            return
+        }
+        didRun = true
+
+        let claudeDirectory = VibeGaugePaths.claudeDirectory(fileManager: fileManager)
+        let settingsURL = claudeDirectory.appendingPathComponent("settings.json")
+        let wrapperURL = claudeDirectory.appendingPathComponent("vibegauge-statusline.sh")
+        let originalURL = claudeDirectory.appendingPathComponent("vibegauge-original-statusline.txt")
+        let legacyOriginalURL = claudeDirectory.appendingPathComponent("codex-credits-original-statusline.txt")
+
+        guard fileManager.fileExists(atPath: claudeDirectory.path) else {
+            return
+        }
+
+        installWrapper(at: wrapperURL, originalURL: originalURL)
+
+        var settings: [String: Any] = [:]
+        if let data = try? Data(contentsOf: settingsURL),
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            settings = object
+        }
+
+        let currentStatusLine = settings["statusLine"] as? [String: Any]
+        let currentCommand = currentStatusLine?["command"] as? String ?? ""
+        if currentCommand.contains(wrapperURL.path) {
+            return
+        }
+
+        if !currentCommand.isEmpty {
+            try? currentCommand.write(to: originalURL, atomically: true, encoding: .utf8)
+        } else if !fileManager.fileExists(atPath: originalURL.path),
+                  let legacyOriginal = try? String(contentsOf: legacyOriginalURL, encoding: .utf8),
+                  !legacyOriginal.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            try? legacyOriginal.write(to: originalURL, atomically: true, encoding: .utf8)
+        }
+
+        let refreshInterval = currentStatusLine?["refreshInterval"] as? Int ?? 30
+        settings["statusLine"] = [
+            "type": "command",
+            "command": wrapperURL.path,
+            "refreshInterval": refreshInterval,
+        ]
+
+        guard let output = try? JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys]) else {
+            return
+        }
+
+        try? output.write(to: settingsURL, options: .atomic)
+    }
+
+    private func installWrapper(at wrapperURL: URL, originalURL: URL) {
+        let script = """
+        #!/bin/bash
+        set -euo pipefail
+
+        input=$(cat)
+        state="${HOME}/.claude/vibegauge-status.json"
+        tmp="${state}.tmp"
+        original="\(originalURL.path)"
+
+        printf "%s" "$input" > "$tmp"
+        mv "$tmp" "$state"
+
+        if [ -s "$original" ]; then
+          original_command=$(cat "$original")
+          if [ -n "$original_command" ]; then
+            printf "%s" "$input" | bash -lc "$original_command" || true
+          fi
+        fi
+        """
+
+        try? script.write(to: wrapperURL, atomically: true, encoding: .utf8)
+        try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: wrapperURL.path)
     }
 }
 
