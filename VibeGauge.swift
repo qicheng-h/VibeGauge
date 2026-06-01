@@ -1196,7 +1196,7 @@ private struct WidgetTokens {
                 hair: .hex(0x14161e, alpha: 0.10),
                 claude: .hex(0xb86d36),
                 codex: .hex(0x4fa88d),
-                warn: .hex(0xb85630),
+                warn: .hex(0xc73532),
                 nativeBackground: .white.withAlphaComponent(0.58),
                 nativeBorder: .white.withAlphaComponent(0.85),
                 monoBackground: .hex(0xfcfbf9, alpha: 0.86),
@@ -1215,7 +1215,7 @@ private struct WidgetTokens {
                 termTrack: .hex(0xd2d6bf),
                 termDot: .hex(0xb9c0a3),
                 termFill: .hex(0x5b6347),
-                termWarn: .hex(0x9a4a2f),
+                termWarn: .hex(0xb83a34),
                 termHair: .hex(0xc2c8ad)
             )
         case .dark:
@@ -1227,7 +1227,7 @@ private struct WidgetTokens {
                 hair: .white.withAlphaComponent(0.10),
                 claude: .hex(0xc57a40),
                 codex: .hex(0x5eb79d),
-                warn: .hex(0xd07a4a),
+                warn: .hex(0xe0524d),
                 nativeBackground: .hex(0x262834, alpha: 0.52),
                 nativeBorder: .white.withAlphaComponent(0.14),
                 monoBackground: .hex(0x121216, alpha: 0.80),
@@ -1246,7 +1246,7 @@ private struct WidgetTokens {
                 termTrack: .hex(0x242a1b),
                 termDot: .hex(0x39402a),
                 termFill: .hex(0x9aac72),
-                termWarn: .hex(0xd07a4a),
+                termWarn: .hex(0xe0524d),
                 termHair: .hex(0x333a26)
             )
         }
@@ -1890,7 +1890,7 @@ final class WidgetView: NSView {
         drawText(row.label, at: NSPoint(x: rect.minX, y: y - 4), attrs: attrs(size: 10.4, weight: .semibold, color: tokens.faint, mono: false))
         drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(row.percent, tokens: tokens), track: tokens.track, radius: radius)
         let percent = showPercentSymbol ? "\(row.percent)%" : "\(row.percent)"
-        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 10.8, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: false))
+        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 10.8, weight: .bold, color: warningColor(for: row.percent, tokens: tokens, terminal: false) ?? tokens.text, mono: false))
         drawRight(row.remaining, x: rect.maxX, y: y - 5, width: resetWidth, attrs: attrs(size: 9.8, weight: .regular, color: tokens.muted, mono: false))
     }
 
@@ -1900,7 +1900,7 @@ final class WidgetView: NSView {
         let percentRight = barX + barWidth + columnGap + percentColumnWidth
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
         drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, tokens: tokens), empty: tokens.track)
-        drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: row.percent >= 95 ? tokens.warn : tokens.text, mono: true))
+        drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: warningColor(for: row.percent, tokens: tokens, terminal: false) ?? tokens.text, mono: true))
         drawRight(row.remaining, x: rect.maxX, y: y, width: resetColumnWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
 
@@ -1915,7 +1915,7 @@ final class WidgetView: NSView {
         NSBezierPath(rect: NSRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(row.percent) / 100, height: bar.height)).fill()
         tokens.termBorder.setStroke()
         NSBezierPath(rect: bar).stroke()
-        drawRight("\(row.percent)%", x: bar.maxX + columnGap + percentColumnWidth, y: y - 2, width: percentColumnWidth, attrs: attrs(size: 10.4, weight: .bold, color: row.percent >= 95 ? tokens.termWarn : tokens.termText, mono: true))
+        drawRight("\(row.percent)%", x: bar.maxX + columnGap + percentColumnWidth, y: y - 2, width: percentColumnWidth, attrs: attrs(size: 10.4, weight: .bold, color: warningColor(for: row.percent, tokens: tokens, terminal: true) ?? tokens.termText, mono: true))
         drawRight(row.remaining, x: rect.maxX, y: y - 2, width: resetColumnWidth, attrs: attrs(size: 10.4, weight: .regular, color: tokens.termDim, mono: true))
     }
 
@@ -2019,6 +2019,10 @@ final class WidgetView: NSView {
         }
 
         return tokens.codex
+    }
+
+    private func warningColor(for percent: Int, tokens: WidgetTokens, terminal: Bool) -> NSColor? {
+        percent >= 90 ? (terminal ? tokens.termWarn : tokens.warn) : nil
     }
 
     private func accent(for service: CreditService, tokens: WidgetTokens) -> NSColor {
