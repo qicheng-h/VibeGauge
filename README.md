@@ -1,10 +1,12 @@
-# VibeGauge
+# VibeGauge - Claude Code and Codex Usage Tracker for macOS
 
 <p>
   <img src="docs/assets/vibegauge-icon.png" alt="VibeGauge app icon" width="96" height="96">
 </p>
 
-A compact native macOS desktop widget for tracking Claude Code and OpenAI Codex quota usage.
+VibeGauge is a compact native macOS desktop widget for tracking Claude Code usage limits and OpenAI Codex rate limits in one place. It shows your 5-hour and 7-day quota windows, used percentage, and reset countdown so you can keep coding without guessing when Claude Code or Codex will run out.
+
+Use VibeGauge as a lightweight Claude Code quota tracker, Codex usage monitor, and AI coding rate-limit widget for vibe coding workflows on macOS.
 
 ## Quick Start
 
@@ -30,7 +32,7 @@ Claude Source -> Local Capture
 
 ## What It Does
 
-VibeGauge shows your current Claude Code and Codex quota windows in a small floating desktop widget:
+VibeGauge shows your current Claude Code and OpenAI Codex quota windows in a small floating desktop widget:
 
 - 5-hour and 7-day quota usage for Claude Code.
 - 5-hour and 7-day rate-limit usage for Codex.
@@ -45,6 +47,16 @@ Usage bars are color-coded by quota usage:
 - Green: 50% or below.
 - Orange: above 50%.
 - Red: 90% or above.
+
+## Who It Is For
+
+VibeGauge is useful if you:
+
+- Use Claude Code and Codex together for AI-assisted coding.
+- Want a Claude Code usage limit widget instead of opening settings repeatedly.
+- Need a Codex rate limit tracker that reads local Codex session data.
+- Care about 5-hour and weekly AI coding quota windows.
+- Want a small always-on-top macOS widget for monitoring AI coding credits while working.
 
 ## Screenshots
 
