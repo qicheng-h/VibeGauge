@@ -28,6 +28,20 @@ fileprivate struct ClaudeRowsSnapshot {
     let modified: Date
 }
 
+fileprivate struct ClaudeUsageAPICache: Codable {
+    let rows: [CreditRow]
+    let refreshedAt: Date
+}
+
+fileprivate struct ClaudeOAuthCredentials {
+    var root: [String: Any]
+    var oauth: [String: Any]
+    let accessToken: String
+    let refreshToken: String?
+    let expiresAt: Date?
+    let scopes: [String]
+}
+
 enum ClaudeDataSource: String, CaseIterable {
     case directAPI = "direct-api"
     case localCapture = "local-capture"
@@ -58,6 +72,10 @@ fileprivate enum VibeGaugePaths {
             claudeDirectory.appendingPathComponent("vibegauge-status.json"),
             claudeDirectory.appendingPathComponent("codex-credits-status.json"),
         ]
+    }
+
+    static func claudeUsageAPICache(fileManager: FileManager = .default) -> URL {
+        claudeDirectory(fileManager: fileManager).appendingPathComponent("vibegauge-usage-api-cache.json")
     }
 }
 
@@ -488,25 +506,55 @@ final class ClaudeRateLimitReader {
 }
 
 final class ClaudeUsageAPIReader {
+    private let fileManager = FileManager.default
     private let service = "Claude Code-credentials"
     private let account = NSUserName()
     private let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+    private let tokenURL = URL(string: "https://platform.claude.com/v1/oauth/token")!
+    private let clientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+    private var cooldownUntil: Date?
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
+        if let cooldownUntil, cooldownUntil > Date() {
+            return cachedSnapshot()
+        }
+
         guard let accessToken = accessToken(),
               let payload = fetchUsage(accessToken: accessToken),
               let rows = rows(from: payload) else {
-            return nil
+            return cachedSnapshot()
         }
 
-        return ClaudeRowsSnapshot(rows: rows, modified: Date())
+        let snapshot = ClaudeRowsSnapshot(rows: rows, modified: Date())
+        writeCache(snapshot)
+        return snapshot
     }
 
     func sourceSignature() -> String {
-        "claude-usage-api:\(Date().timeIntervalSince1970.rounded(.down))"
+        let cacheURL = VibeGaugePaths.claudeUsageAPICache(fileManager: fileManager)
+        guard let values = try? cacheURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return "claude-usage-api-cache:missing"
+        }
+
+        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(cacheURL.path):\(modified):\(values.fileSize ?? 0)"
     }
 
     private func accessToken() -> String? {
+        guard var credentials = credentials() else {
+            return nil
+        }
+
+        if let expiresAt = credentials.expiresAt,
+           expiresAt.timeIntervalSinceNow < 60,
+           let refreshed = refreshCredentials(credentials) {
+            credentials = refreshed
+        }
+
+        return credentials.accessToken
+    }
+
+    private func credentials() -> ClaudeOAuthCredentials? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -525,7 +573,115 @@ final class ClaudeUsageAPIReader {
             return nil
         }
 
-        return token
+        let refreshToken = oauth["refreshToken"] as? String
+        let scopes = (oauth["scopes"] as? [String]) ?? []
+        let expiresAt: Date?
+        if let milliseconds = number(oauth["expiresAt"]) {
+            expiresAt = Date(timeIntervalSince1970: milliseconds / 1000)
+        } else {
+            expiresAt = nil
+        }
+
+        return ClaudeOAuthCredentials(
+            root: object,
+            oauth: oauth,
+            accessToken: token,
+            refreshToken: refreshToken,
+            expiresAt: expiresAt,
+            scopes: scopes
+        )
+    }
+
+    private func refreshCredentials(_ credentials: ClaudeOAuthCredentials) -> ClaudeOAuthCredentials? {
+        guard let refreshToken = credentials.refreshToken, !refreshToken.isEmpty else {
+            return nil
+        }
+
+        let scopes = credentials.scopes.isEmpty
+            ? ["user:profile", "user:inference", "user:sessions:claude_code", "user:mcp_servers", "user:file_upload"]
+            : credentials.scopes
+        let payload: [String: Any] = [
+            "grant_type": "refresh_token",
+            "refresh_token": refreshToken,
+            "client_id": clientID,
+            "scope": scopes.joined(separator: " "),
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            return nil
+        }
+
+        var request = URLRequest(url: tokenURL)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("claude-code/2.1.159", forHTTPHeaderField: "User-Agent")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var refreshed: ClaudeOAuthCredentials?
+        var shouldCooldown = false
+
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
+            defer { semaphore.signal() }
+
+            guard let self,
+                  let http = response as? HTTPURLResponse else {
+                return
+            }
+
+            if http.statusCode == 429 {
+                shouldCooldown = true
+                return
+            }
+
+            guard http.statusCode == 200,
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let accessToken = object["access_token"] as? String,
+                  let expiresIn = self.number(object["expires_in"]) else {
+                return
+            }
+
+            var root = credentials.root
+            var oauth = credentials.oauth
+            oauth["accessToken"] = accessToken
+            oauth["refreshToken"] = (object["refresh_token"] as? String) ?? refreshToken
+            oauth["expiresAt"] = Date().timeIntervalSince1970 * 1000 + expiresIn * 1000
+            if let scope = object["scope"] as? String {
+                oauth["scopes"] = scope.split(separator: " ").map(String.init)
+            }
+            root["claudeAiOauth"] = oauth
+
+            guard self.saveCredentials(root) else {
+                return
+            }
+
+            refreshed = self.credentials()
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 11)
+        if shouldCooldown {
+            cooldownUntil = Date().addingTimeInterval(120)
+        }
+        return refreshed
+    }
+
+    private func saveCredentials(_ object: [String: Any]) -> Bool {
+        guard JSONSerialization.isValidJSONObject(object),
+              let data = try? JSONSerialization.data(withJSONObject: object) else {
+            return false
+        }
+
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+        ]
+        let update: [String: Any] = [
+            kSecValueData as String: data,
+        ]
+
+        return SecItemUpdate(query as CFDictionary, update as CFDictionary) == errSecSuccess
     }
 
     private func fetchUsage(accessToken: String) -> [String: Any]? {
@@ -542,8 +698,16 @@ final class ClaudeUsageAPIReader {
         URLSession.shared.dataTask(with: request) { data, response, _ in
             defer { semaphore.signal() }
 
-            guard let http = response as? HTTPURLResponse,
-                  http.statusCode == 200,
+            guard let http = response as? HTTPURLResponse else {
+                return
+            }
+
+            if http.statusCode == 429 {
+                self.cooldownUntil = Date().addingTimeInterval(120)
+                return
+            }
+
+            guard http.statusCode == 200,
                   let data,
                   let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 return
@@ -554,6 +718,27 @@ final class ClaudeUsageAPIReader {
 
         _ = semaphore.wait(timeout: .now() + 9)
         return result
+    }
+
+    private func cachedSnapshot() -> ClaudeRowsSnapshot? {
+        let cacheURL = VibeGaugePaths.claudeUsageAPICache(fileManager: fileManager)
+        guard let data = try? Data(contentsOf: cacheURL),
+              let cache = try? JSONDecoder().decode(ClaudeUsageAPICache.self, from: data),
+              !cache.rows.isEmpty else {
+            return nil
+        }
+
+        return ClaudeRowsSnapshot(rows: cache.rows, modified: cache.refreshedAt)
+    }
+
+    private func writeCache(_ snapshot: ClaudeRowsSnapshot) {
+        let cacheURL = VibeGaugePaths.claudeUsageAPICache(fileManager: fileManager)
+        let cache = ClaudeUsageAPICache(rows: snapshot.rows, refreshedAt: snapshot.modified)
+        guard let data = try? JSONEncoder().encode(cache) else {
+            return
+        }
+
+        try? data.write(to: cacheURL, options: .atomic)
     }
 
     private func rows(from payload: [String: Any]) -> [CreditRow]? {
@@ -776,9 +961,6 @@ final class ClaudeUsageCacheReader {
             input.fileHandleForWriting.write(data)
             try input.fileHandleForWriting.close()
             process.waitUntilExit()
-            guard process.terminationStatus == 0 else {
-                return nil
-            }
 
             let decoded = (try? Data(contentsOf: outputURL)) ?? Data()
             return decoded.isEmpty ? nil : decoded
@@ -1362,7 +1544,11 @@ final class WidgetView: NSView {
 
     private func automaticRefresh() {
         sourceCheckCounter += 1
-        refreshNow(checkSignature: sourceCheckCounter >= 4)
+        if sourceCheckCounter >= 4 {
+            refreshNow(checkSignature: true)
+        } else {
+            needsDisplay = true
+        }
     }
 
     private func refreshNow(checkSignature: Bool) {
