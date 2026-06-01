@@ -773,8 +773,6 @@ final class CodexRateLimitReader {
         ]
 
         var latestSnapshot: CodexRateLimitSnapshot?
-        var latestLocalSnapshot: CodexRateLimitSnapshot?
-        let appDirectory = Bundle.main.bundleURL.deletingLastPathComponent().standardizedFileURL.path
 
         for file in recentJSONLFiles(roots: roots) {
             guard let snapshot = latestRateLimits(in: file) else {
@@ -784,14 +782,9 @@ final class CodexRateLimitReader {
             if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
                 latestSnapshot = snapshot
             }
-
-            if snapshot.sourceCwd == appDirectory,
-               latestLocalSnapshot == nil || snapshot.timestamp > latestLocalSnapshot!.timestamp {
-                latestLocalSnapshot = snapshot
-            }
         }
 
-        return latestLocalSnapshot ?? latestSnapshot
+        return latestSnapshot
     }
 
     private func recentJSONLFiles(roots: [URL]) -> [URL] {
