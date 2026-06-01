@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Security
 
 struct CreditData: Codable {
     var services: [CreditService]
@@ -217,11 +218,16 @@ final class ClaudeStatusLineInstaller {
 
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
+    private let apiReader = ClaudeUsageAPIReader()
     private let cacheReader = ClaudeUsageCacheReader()
     private let freshStatusMaxAge: TimeInterval = 120
     private var capturedAt: Date = .distantPast
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
+        if let apiSnapshot = apiReader.loadSnapshot() {
+            return apiSnapshot
+        }
+
         let statusSnapshot = statusLineSnapshot()
         if let statusSnapshot, Date().timeIntervalSince(statusSnapshot.modified) <= freshStatusMaxAge {
             return statusSnapshot
@@ -267,7 +273,7 @@ final class ClaudeRateLimitReader {
     }
 
     func sourceSignature() -> String {
-        ([cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
+        ([apiReader.sourceSignature(), cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
             .joined(separator: "|")
     }
 
@@ -458,6 +464,169 @@ final class ClaudeRateLimitReader {
         }
 
         return max(0, Int(target.timeIntervalSince(now)))
+    }
+}
+
+final class ClaudeUsageAPIReader {
+    private let service = "Claude Code-credentials"
+    private let account = NSUserName()
+    private let usageURL = URL(string: "https://api.anthropic.com/api/oauth/usage")!
+
+    fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
+        guard let accessToken = accessToken(),
+              let payload = fetchUsage(accessToken: accessToken),
+              let rows = rows(from: payload) else {
+            return nil
+        }
+
+        return ClaudeRowsSnapshot(rows: rows, modified: Date())
+    }
+
+    func sourceSignature() -> String {
+        "claude-usage-api:\(Date().timeIntervalSince1970.rounded(.down))"
+    }
+
+    private func accessToken() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let oauth = object["claudeAiOauth"] as? [String: Any],
+              let token = oauth["accessToken"] as? String,
+              !token.isEmpty else {
+            return nil
+        }
+
+        return token
+    }
+
+    private func fetchUsage(accessToken: String) -> [String: Any]? {
+        var request = URLRequest(url: usageURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 8
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("claude-code/2.1.150", forHTTPHeaderField: "User-Agent")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [String: Any]?
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+
+            result = object
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 9)
+        return result
+    }
+
+    private func rows(from payload: [String: Any]) -> [CreditRow]? {
+        var rows: [CreditRow] = []
+
+        if let fiveHour = payload["five_hour"] as? [String: Any] {
+            rows.append(row(from: fiveHour, label: "5h"))
+        }
+
+        if let sevenDay = payload["seven_day"] as? [String: Any] {
+            rows.append(row(from: sevenDay, label: "7d"))
+        }
+
+        return rows.isEmpty ? nil : rows
+    }
+
+    private func row(from limit: [String: Any], label: String) -> CreditRow {
+        let rawUtilization = number(limit["utilization"]) ?? 0
+        let percentValue = rawUtilization <= 1 ? rawUtilization * 100 : rawUtilization
+        let reset = resetDisplay(from: limit["resets_at"])
+
+        return CreditRow(
+            label: label,
+            percent: reset.expired ? 0 : max(0, min(Int(percentValue.rounded()), 100)),
+            remaining: reset.remaining
+        )
+    }
+
+    private func number(_ value: Any?) -> Double? {
+        if let value = value as? Double {
+            return value
+        }
+
+        if let value = value as? Int {
+            return Double(value)
+        }
+
+        if let value = value as? String {
+            return Double(value)
+        }
+
+        return nil
+    }
+
+    private func resetDisplay(from value: Any?) -> ResetDisplay {
+        let date: Date?
+        if let timestamp = number(value) {
+            date = Date(timeIntervalSince1970: timestamp)
+        } else if let text = value as? String {
+            date = parseISODate(text)
+        } else {
+            date = nil
+        }
+
+        guard let date else {
+            return ResetDisplay(remaining: "no reset", expired: false)
+        }
+
+        let seconds = max(0, Int(date.timeIntervalSinceNow))
+        if seconds == 0 {
+            return ResetDisplay(remaining: "now", expired: true)
+        }
+
+        return ResetDisplay(remaining: formatDuration(seconds: seconds), expired: false)
+    }
+
+    private func parseISODate(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) {
+            return date
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
+        if let date = formatter.date(from: text) {
+            return date
+        }
+
+        return ISO8601DateFormatter().date(from: text)
+    }
+
+    private func formatDuration(seconds: Int) -> String {
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3600
+        let minutes = (seconds % 3600) / 60
+
+        if days > 0 {
+            return "\(days)d \(hours)h"
+        }
+
+        return "\(hours)h \(minutes)m"
     }
 }
 

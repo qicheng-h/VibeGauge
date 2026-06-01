@@ -19,7 +19,8 @@ swiftc \
   -module-cache-path .build/module-cache \
   VibeGauge.swift \
   -o "${MACOS_DIR}/${EXECUTABLE_NAME}" \
-  -framework AppKit
+  -framework AppKit \
+  -framework Security
 
 cp "${ICON_FILE}" "${RESOURCES_DIR}/${ICON_FILE}"
 
