@@ -22,6 +22,12 @@ open "VibeGauge.app"
 
 End users do not need to build the app from source.
 
+By default, VibeGauge uses the **Direct API** Claude Code data source because it refreshes independently of open Claude Code sessions. If you prefer not to grant Keychain access, right-click the widget and choose:
+
+```text
+Claude Source -> Local Capture
+```
+
 ## What It Does
 
 VibeGauge shows your current Claude Code and Codex quota windows in a small floating desktop widget:
@@ -48,13 +54,44 @@ Usage bars are color-coded by quota usage:
 
 ## Claude Code Setup
 
-VibeGauge first tries to read Claude's own `/usage` response from the Claude desktop app HTTP cache. This does not read Claude cookies or tokens, but it does require `zstd` to decompress the cached response. On this machine Homebrew installs it at:
+VibeGauge supports two Claude Code data sources. You can switch between them from the widget context menu:
 
-```sh
-/opt/homebrew/bin/zstd
+```text
+Right-click widget -> Claude Source
 ```
 
-If no readable cache is available, the widget falls back to Claude Code status line input. Install the capture wrapper once:
+### Option 1: Direct API
+
+This is the default. VibeGauge reads the existing Claude Code OAuth token from the precise macOS Keychain item used by Claude Code:
+
+```text
+Service: Claude Code-credentials
+Account: your macOS username
+```
+
+It then requests Claude's usage endpoint:
+
+```text
+https://api.anthropic.com/api/oauth/usage
+```
+
+Pros:
+
+- Most accurate and responsive source.
+- Does not depend on an open Claude Code terminal session.
+- Avoids stale `statusLine` snapshots.
+- Matches the Claude Code Settings usage page more closely.
+
+Cons:
+
+- Requires macOS Keychain access to Claude Code's OAuth token.
+- May trigger a Keychain permission prompt the first time the app runs.
+- Sends a usage request to Anthropic from VibeGauge.
+- If Claude Code changes its Keychain storage format, this source may need an update.
+
+### Option 2: Local Capture
+
+Local Capture avoids reading OAuth tokens. It relies on Claude Code's `statusLine` payload and local cache files. Install the capture wrapper once:
 
 ```sh
 ./install-claude-statusline-capture.sh
@@ -67,6 +104,25 @@ The wrapper preserves your existing status line command and writes the latest st
 ```
 
 Restart Claude Code or open a new Claude Code session after installing this wrapper. Already-running sessions may keep the old status line command and will not update the capture file.
+
+Pros:
+
+- Does not read OAuth tokens or cookies.
+- Works entirely from local files after Claude Code writes status data.
+- More conservative privacy posture.
+
+Cons:
+
+- Less reliable: Claude Code must actively refresh its status line.
+- Existing Claude Code sessions may keep old settings until restarted.
+- Data can become stale if Claude Code is closed, idle, suspended, or not emitting `statusLine` payloads.
+- May require `zstd` to read Claude desktop HTTP cache fallback data. Homebrew commonly installs it at:
+
+```sh
+/opt/homebrew/bin/zstd
+```
+
+If Direct API fails, VibeGauge automatically falls back to the local sources for that refresh.
 
 ## Build From Source
 
@@ -87,7 +143,7 @@ The script creates `VibeGauge.app` in the project folder.
 - Click the refresh button to refresh live quota data.
 - Drag the dotted handle at the top center to move the widget.
 - Hold `Command` or `Option` and drag anywhere on the widget to move it.
-- Right-click the widget to choose an exact style, switch light/dark appearance, refresh, or quit.
+- Right-click the widget to choose an exact style, switch light/dark appearance, choose Claude Code data source, refresh, or quit.
 - Hover any top button to see what it does.
 - Press `Esc` while the widget is focused to quit.
 - The widget redraws countdowns every 30 seconds and checks source-file changes every two minutes.
@@ -101,5 +157,5 @@ The script creates `VibeGauge.app` in the project folder.
 ## Data Sources
 
 - Codex reads the latest `rate_limits` event from `~/.codex/sessions` and `~/.codex/archived_sessions`.
-- Claude Code reads current-session and weekly quota windows from Claude desktop's cached `/usage` response, then falls back to `rate_limits` captured from status line input.
+- Claude Code uses Direct API by default, with a user-selectable Local Capture mode for users who prefer not to grant Keychain access.
 - Context-window usage is intentionally not used because it is not subscription quota.

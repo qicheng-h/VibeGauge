@@ -28,6 +28,25 @@ fileprivate struct ClaudeRowsSnapshot {
     let modified: Date
 }
 
+enum ClaudeDataSource: String, CaseIterable {
+    case directAPI = "direct-api"
+    case localCapture = "local-capture"
+
+    static let defaultsKey = "claude-data-source"
+
+    var title: String {
+        switch self {
+        case .directAPI: return "Direct API"
+        case .localCapture: return "Local Capture"
+        }
+    }
+
+    static func stored() -> ClaudeDataSource {
+        let raw = UserDefaults.standard.string(forKey: defaultsKey) ?? ClaudeDataSource.directAPI.rawValue
+        return ClaudeDataSource(rawValue: raw) ?? .directAPI
+    }
+}
+
 fileprivate enum VibeGaugePaths {
     static func claudeDirectory(fileManager: FileManager = .default) -> URL {
         fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude")
@@ -224,7 +243,8 @@ final class ClaudeRateLimitReader {
     private var capturedAt: Date = .distantPast
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
-        if let apiSnapshot = apiReader.loadSnapshot() {
+        if ClaudeDataSource.stored() == .directAPI,
+           let apiSnapshot = apiReader.loadSnapshot() {
             return apiSnapshot
         }
 
@@ -273,7 +293,7 @@ final class ClaudeRateLimitReader {
     }
 
     func sourceSignature() -> String {
-        ([apiReader.sourceSignature(), cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
+        ([ClaudeDataSource.stored().rawValue, apiReader.sourceSignature(), cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
             .joined(separator: "|")
     }
 
@@ -1385,6 +1405,7 @@ final class WidgetView: NSView {
         menu.addItem(topItem)
         menu.addItem(styleMenuItem())
         menu.addItem(appearanceMenuItem())
+        menu.addItem(claudeSourceMenuItem())
         menu.addItem(withTitle: "Refresh", action: #selector(reloadFromMenu), keyEquivalent: "r")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -1413,6 +1434,21 @@ final class WidgetView: NSView {
             child.target = self
             child.tag = index
             child.state = widgetAppearance == appearance ? .on : .off
+            submenu.addItem(child)
+        }
+        item.submenu = submenu
+        return item
+    }
+
+    private func claudeSourceMenuItem() -> NSMenuItem {
+        let item = NSMenuItem(title: "Claude Source", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let currentSource = ClaudeDataSource.stored()
+        for (index, source) in ClaudeDataSource.allCases.enumerated() {
+            let child = NSMenuItem(title: source.title, action: #selector(selectClaudeSourceFromMenu(_:)), keyEquivalent: "")
+            child.target = self
+            child.tag = index
+            child.state = currentSource == source ? .on : .off
             submenu.addItem(child)
         }
         item.submenu = submenu
@@ -1497,6 +1533,17 @@ final class WidgetView: NSView {
         UserDefaults.standard.set(widgetAppearance.rawValue, forKey: Self.appearanceKey)
         updateTooltips()
         needsDisplay = true
+    }
+
+    @objc private func selectClaudeSourceFromMenu(_ sender: NSMenuItem) {
+        guard ClaudeDataSource.allCases.indices.contains(sender.tag) else {
+            return
+        }
+
+        let source = ClaudeDataSource.allCases[sender.tag]
+        UserDefaults.standard.set(source.rawValue, forKey: ClaudeDataSource.defaultsKey)
+        sourceSignature = ""
+        reload()
     }
 
     private func resizeWindowForCurrentStyle() {
