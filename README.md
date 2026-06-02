@@ -30,6 +30,12 @@ By default, VibeGauge uses the **Direct API** Claude Code data source because it
 Claude Source -> Local Capture
 ```
 
+If Direct API is rate-limited or Claude Code's token is stale, you can opt in to Claude Desktop's browser session:
+
+```text
+Claude Source -> Claude Desktop Session
+```
+
 ## What It Does
 
 VibeGauge shows your current Claude Code and OpenAI Codex quota windows in a small floating desktop widget:
@@ -66,13 +72,38 @@ VibeGauge is useful if you:
 
 ## Claude Code Setup
 
-VibeGauge supports two Claude Code data sources. You can switch between them from the widget context menu:
+VibeGauge supports three Claude Code data sources. You can switch between them from the widget context menu:
 
 ```text
 Right-click widget -> Claude Source
 ```
 
-### Option 1: Direct API
+### Option 1: Claude Desktop Session
+
+This opt-in source reads Claude Desktop's local encrypted cookie database, decrypts Claude cookies through the macOS Keychain item used by Claude Desktop, and requests the same Claude web usage endpoint used by the Settings page:
+
+```text
+https://claude.ai/api/organizations/<your-org-id>/usage
+```
+
+VibeGauge does not save, print, upload, or log the cookie values. Cookies are used only in memory to make the usage request.
+
+Pros:
+
+- Refreshes independently of Claude Code terminal sessions.
+- Works when Claude Code's OAuth access token is expired.
+- Usually matches the Claude Desktop Settings usage page directly.
+- Avoids waiting for Claude Desktop's HTTP cache to update.
+
+Cons:
+
+- Requires access to Claude Desktop's encrypted cookie store and its macOS Keychain safe-storage key.
+- Uses your Claude Desktop login session to make a usage request.
+- May trigger a Keychain permission prompt.
+- More sensitive than Direct API or Local Capture, so it is opt-in and not the default.
+- If Claude Desktop changes its cookie encryption or usage endpoint, this source may need an update.
+
+### Option 2: Direct API
 
 This is the default. VibeGauge reads the existing Claude Code OAuth token from the precise macOS Keychain item used by Claude Code:
 
@@ -101,7 +132,7 @@ Cons:
 - Sends a usage request to Anthropic from VibeGauge.
 - If Claude Code changes its Keychain storage format, this source may need an update.
 
-### Option 2: Local Capture
+### Option 3: Local Capture
 
 Local Capture avoids reading OAuth tokens. It relies on Claude Code's `statusLine` payload and local cache files. Install the capture wrapper once:
 
@@ -134,7 +165,7 @@ Cons:
 /opt/homebrew/bin/zstd
 ```
 
-If Direct API fails, VibeGauge automatically falls back to the local sources for that refresh.
+If Claude Desktop Session or Direct API fails, VibeGauge automatically falls back to the local sources for that refresh.
 
 ## Build From Source
 
@@ -169,5 +200,5 @@ The script creates `VibeGauge.app` in the project folder.
 ## Data Sources
 
 - Codex reads the latest `rate_limits` event from `~/.codex/sessions` and `~/.codex/archived_sessions`.
-- Claude Code uses Direct API by default, with a user-selectable Local Capture mode for users who prefer not to grant Keychain access.
+- Claude Code uses Direct API by default, with user-selectable Claude Desktop Session and Local Capture modes.
 - Context-window usage is intentionally not used because it is not subscription quota.

@@ -20,7 +20,8 @@ swiftc \
   VibeGauge.swift \
   -o "${MACOS_DIR}/${EXECUTABLE_NAME}" \
   -framework AppKit \
-  -framework Security
+  -framework Security \
+  -lsqlite3
 
 cp "${ICON_FILE}" "${RESOURCES_DIR}/${ICON_FILE}"
 

@@ -1,6 +1,8 @@
 import AppKit
+import CommonCrypto
 import Foundation
 import Security
+import SQLite3
 
 struct CreditData: Codable {
     var services: [CreditService]
@@ -43,6 +45,7 @@ fileprivate struct ClaudeOAuthCredentials {
 }
 
 enum ClaudeDataSource: String, CaseIterable {
+    case desktopSession = "desktop-session"
     case directAPI = "direct-api"
     case localCapture = "local-capture"
 
@@ -50,6 +53,7 @@ enum ClaudeDataSource: String, CaseIterable {
 
     var title: String {
         switch self {
+        case .desktopSession: return "Claude Desktop Session"
         case .directAPI: return "Direct API"
         case .localCapture: return "Local Capture"
         }
@@ -255,13 +259,21 @@ final class ClaudeStatusLineInstaller {
 
 final class ClaudeRateLimitReader {
     private let fileManager = FileManager.default
+    private let desktopReader = ClaudeDesktopSessionUsageReader()
     private let apiReader = ClaudeUsageAPIReader()
     private let cacheReader = ClaudeUsageCacheReader()
     private let freshStatusMaxAge: TimeInterval = 120
     private var capturedAt: Date = .distantPast
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
-        if ClaudeDataSource.stored() == .directAPI,
+        let source = ClaudeDataSource.stored()
+
+        if source == .desktopSession,
+           let desktopSnapshot = desktopReader.loadSnapshot() {
+            return desktopSnapshot
+        }
+
+        if source == .desktopSession || source == .directAPI,
            let apiSnapshot = apiReader.loadSnapshot() {
             return apiSnapshot
         }
@@ -311,7 +323,7 @@ final class ClaudeRateLimitReader {
     }
 
     func sourceSignature() -> String {
-        ([ClaudeDataSource.stored().rawValue, apiReader.sourceSignature(), cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
+        ([ClaudeDataSource.stored().rawValue, desktopReader.sourceSignature(), apiReader.sourceSignature(), cacheReader.sourceSignature()] + VibeGaugePaths.claudeStatusFiles(fileManager: fileManager).map(fileSignature))
             .joined(separator: "|")
     }
 
@@ -502,6 +514,361 @@ final class ClaudeRateLimitReader {
         }
 
         return max(0, Int(target.timeIntervalSince(now)))
+    }
+}
+
+final class ClaudeDesktopSessionUsageReader {
+    private let fileManager = FileManager.default
+    private let safeStorageService = "Claude Safe Storage"
+    private let safeStorageAccount = "Claude Key"
+    private let cacheURL: URL
+
+    init(fileManager: FileManager = .default) {
+        self.cacheURL = VibeGaugePaths.claudeUsageAPICache(fileManager: fileManager)
+    }
+
+    fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
+        guard let cookieJar = desktopCookies(),
+              let orgID = cookieJar["lastActiveOrg"],
+              !orgID.isEmpty,
+              let payload = fetchUsage(orgID: orgID, cookieHeader: cookieHeader(from: cookieJar)),
+              let rows = rows(from: payload) else {
+            return nil
+        }
+
+        let snapshot = ClaudeRowsSnapshot(rows: rows, modified: Date())
+        writeCache(snapshot)
+        return snapshot
+    }
+
+    func sourceSignature() -> String {
+        let cookieURL = cookiesURL()
+        guard let values = try? cookieURL.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return "claude-desktop-session:missing"
+        }
+
+        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        return "\(cookieURL.path):\(modified):\(values.fileSize ?? 0)"
+    }
+
+    private func desktopCookies() -> [String: String]? {
+        guard let key = safeStorageKey() else {
+            return nil
+        }
+
+        let url = cookiesURL()
+        guard fileManager.fileExists(atPath: url.path) else {
+            return nil
+        }
+
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK,
+              let database else {
+            return nil
+        }
+        defer {
+            sqlite3_close(database)
+        }
+
+        let now = chromeTimestamp(for: Date())
+        let sql = """
+        SELECT name, value, encrypted_value
+        FROM cookies
+        WHERE (host_key = '.claude.ai' OR host_key = 'claude.ai')
+          AND (has_expires = 0 OR expires_utc > ?)
+        """
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            return nil
+        }
+        defer {
+            sqlite3_finalize(statement)
+        }
+
+        sqlite3_bind_int64(statement, 1, now)
+        var cookies: [String: String] = [:]
+
+        while sqlite3_step(statement) == SQLITE_ROW {
+            guard let namePointer = sqlite3_column_text(statement, 0) else {
+                continue
+            }
+
+            let name = String(cString: namePointer)
+            let value = stringColumn(statement, index: 1)
+            let encryptedValue = dataColumn(statement, index: 2)
+            let resolvedValue: String?
+
+            if let value, !value.isEmpty {
+                resolvedValue = value
+            } else if let encryptedValue, !encryptedValue.isEmpty {
+                resolvedValue = decryptCookie(encryptedValue, key: key)
+            } else {
+                resolvedValue = nil
+            }
+
+            if let resolvedValue, !resolvedValue.isEmpty {
+                cookies[name] = resolvedValue
+            }
+        }
+
+        return cookies["sessionKey"] == nil ? nil : cookies
+    }
+
+    private func safeStorageKey() -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: safeStorageService,
+            kSecAttrAccount as String: safeStorageAccount,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let password = item as? Data else {
+            return nil
+        }
+
+        let salt = Data("saltysalt".utf8)
+        var key = Data(repeating: 0, count: kCCKeySizeAES128)
+        let keyLength = key.count
+        let status = key.withUnsafeMutableBytes { keyBytes in
+            password.withUnsafeBytes { passwordBytes in
+                salt.withUnsafeBytes { saltBytes in
+                    CCKeyDerivationPBKDF(
+                        CCPBKDFAlgorithm(kCCPBKDF2),
+                        passwordBytes.bindMemory(to: Int8.self).baseAddress,
+                        password.count,
+                        saltBytes.bindMemory(to: UInt8.self).baseAddress,
+                        salt.count,
+                        CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA1),
+                        1003,
+                        keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                        keyLength
+                    )
+                }
+            }
+        }
+
+        return status == kCCSuccess ? key : nil
+    }
+
+    private func decryptCookie(_ data: Data, key: Data) -> String? {
+        let encrypted: Data
+        if data.starts(with: Data("v10".utf8)) || data.starts(with: Data("v11".utf8)) {
+            encrypted = data.dropFirst(3)
+        } else {
+            encrypted = data
+        }
+
+        guard !encrypted.isEmpty else {
+            return nil
+        }
+
+        let iv = Data(repeating: 0x20, count: kCCBlockSizeAES128)
+        var output = Data(repeating: 0, count: encrypted.count + kCCBlockSizeAES128)
+        let outputCapacity = output.count
+        var outputLength = 0
+
+        let status = output.withUnsafeMutableBytes { outputBytes in
+            encrypted.withUnsafeBytes { encryptedBytes in
+                key.withUnsafeBytes { keyBytes in
+                    iv.withUnsafeBytes { ivBytes in
+                        CCCrypt(
+                            CCOperation(kCCDecrypt),
+                            CCAlgorithm(kCCAlgorithmAES),
+                            CCOptions(kCCOptionPKCS7Padding),
+                            keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                            key.count,
+                            ivBytes.bindMemory(to: UInt8.self).baseAddress,
+                            encryptedBytes.bindMemory(to: UInt8.self).baseAddress,
+                            encrypted.count,
+                            outputBytes.bindMemory(to: UInt8.self).baseAddress,
+                            outputCapacity,
+                            &outputLength
+                        )
+                    }
+                }
+            }
+        }
+
+        guard status == kCCSuccess else {
+            return nil
+        }
+
+        output.removeSubrange(outputLength..<output.count)
+        return String(data: output, encoding: .utf8)
+    }
+
+    private func fetchUsage(orgID: String, cookieHeader: String) -> [String: Any]? {
+        guard let url = URL(string: "https://claude.ai/api/organizations/\(orgID)/usage") else {
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Origin")
+        request.setValue("https://claude.ai/settings/usage", forHTTPHeaderField: "Referer")
+        request.setValue("VibeGauge/1.0", forHTTPHeaderField: "User-Agent")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: [String: Any]?
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+
+            guard let http = response as? HTTPURLResponse,
+                  http.statusCode == 200,
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+
+            result = object
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 11)
+        return result
+    }
+
+    private func rows(from payload: [String: Any]) -> [CreditRow]? {
+        var rows: [CreditRow] = []
+
+        if let fiveHour = payload["five_hour"] as? [String: Any] {
+            rows.append(row(from: fiveHour, label: "5h"))
+        }
+
+        if let sevenDay = payload["seven_day"] as? [String: Any] {
+            rows.append(row(from: sevenDay, label: "7d"))
+        }
+
+        return rows.isEmpty ? nil : rows
+    }
+
+    private func row(from limit: [String: Any], label: String) -> CreditRow {
+        let rawUtilization = number(limit["utilization"]) ?? 0
+        let percentValue = rawUtilization <= 1 ? rawUtilization * 100 : rawUtilization
+        let reset = resetDisplay(from: limit["resets_at"])
+
+        return CreditRow(
+            label: label,
+            percent: reset.expired ? 0 : max(0, min(Int(percentValue.rounded()), 100)),
+            remaining: reset.remaining
+        )
+    }
+
+    private func writeCache(_ snapshot: ClaudeRowsSnapshot) {
+        let cache = ClaudeUsageAPICache(rows: snapshot.rows, refreshedAt: snapshot.modified)
+        guard let data = try? JSONEncoder().encode(cache) else {
+            return
+        }
+
+        try? data.write(to: cacheURL, options: .atomic)
+    }
+
+    private func cookiesURL() -> URL {
+        fileManager.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Claude/Cookies")
+    }
+
+    private func cookieHeader(from cookies: [String: String]) -> String {
+        cookies
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: "; ")
+    }
+
+    private func stringColumn(_ statement: OpaquePointer, index: Int32) -> String? {
+        guard let pointer = sqlite3_column_text(statement, index) else {
+            return nil
+        }
+
+        return String(cString: pointer)
+    }
+
+    private func dataColumn(_ statement: OpaquePointer, index: Int32) -> Data? {
+        let count = sqlite3_column_bytes(statement, index)
+        guard count > 0,
+              let pointer = sqlite3_column_blob(statement, index) else {
+            return nil
+        }
+
+        return Data(bytes: pointer, count: Int(count))
+    }
+
+    private func chromeTimestamp(for date: Date) -> Int64 {
+        Int64((date.timeIntervalSince1970 + 11_644_473_600) * 1_000_000)
+    }
+
+    private func number(_ value: Any?) -> Double? {
+        if let value = value as? Double {
+            return value
+        }
+
+        if let value = value as? Int {
+            return Double(value)
+        }
+
+        if let value = value as? String {
+            return Double(value)
+        }
+
+        return nil
+    }
+
+    private func resetDisplay(from value: Any?) -> ResetDisplay {
+        let date: Date?
+        if let timestamp = number(value) {
+            date = Date(timeIntervalSince1970: timestamp)
+        } else if let text = value as? String {
+            date = parseISODate(text)
+        } else {
+            date = nil
+        }
+
+        guard let date else {
+            return ResetDisplay(remaining: "no reset", expired: false)
+        }
+
+        let seconds = max(0, Int(date.timeIntervalSinceNow))
+        if seconds == 0 {
+            return ResetDisplay(remaining: "now", expired: true)
+        }
+
+        return ResetDisplay(remaining: formatDuration(seconds: seconds), expired: false)
+    }
+
+    private func parseISODate(_ text: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: text) {
+            return date
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSXXXXX"
+        if let date = formatter.date(from: text) {
+            return date
+        }
+
+        return ISO8601DateFormatter().date(from: text)
+    }
+
+    private func formatDuration(seconds: Int) -> String {
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3600
+        let minutes = (seconds % 3600) / 60
+
+        if days > 0 {
+            return "\(days)d \(hours)h"
+        }
+
+        return "\(hours)h \(minutes)m"
     }
 }
 
