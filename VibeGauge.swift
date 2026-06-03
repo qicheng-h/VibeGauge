@@ -1442,8 +1442,14 @@ private struct CodexPayload: Decodable {
 }
 
 private struct CodexRateLimits: Decodable {
+    let limit_id: String?
+    let limit_name: String?
     let primary: CodexLimit?
     let secondary: CodexLimit?
+
+    var isMainCodexLimit: Bool {
+        limit_id == nil || limit_id == "codex"
+    }
 }
 
 private struct CodexLimit: Decodable {
@@ -1511,18 +1517,23 @@ final class CodexRateLimitReader {
         ]
 
         var latestSnapshot: CodexRateLimitSnapshot?
+        var latestFallbackSnapshot: CodexRateLimitSnapshot?
 
         for file in recentJSONLFiles(roots: roots) {
             guard let snapshot = latestRateLimits(in: file) else {
                 continue
             }
 
-            if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
-                latestSnapshot = snapshot
+            if snapshot.limits.isMainCodexLimit {
+                if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
+                    latestSnapshot = snapshot
+                }
+            } else if latestFallbackSnapshot == nil || snapshot.timestamp > latestFallbackSnapshot!.timestamp {
+                latestFallbackSnapshot = snapshot
             }
         }
 
-        return latestSnapshot
+        return latestSnapshot ?? latestFallbackSnapshot
     }
 
     private func recentJSONLFiles(roots: [URL]) -> [URL] {
@@ -1557,17 +1568,27 @@ final class CodexRateLimitReader {
 
         let text = String(decoding: data, as: UTF8.self)
         let sourceCwd = sessionCwd(from: file)
+        var fallbackSnapshot: CodexRateLimitSnapshot?
 
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
-            if let eventData = String(line).data(using: .utf8),
-               let event = try? decoder.decode(CodexLogEvent.self, from: eventData),
-               let limits = event.rate_limits ?? event.payload?.rate_limits,
-               let timestamp = parseTimestamp(event.timestamp) {
-                return CodexRateLimitSnapshot(limits: limits, timestamp: timestamp, sourceCwd: sourceCwd)
+            guard let eventData = String(line).data(using: .utf8),
+                  let event = try? decoder.decode(CodexLogEvent.self, from: eventData),
+                  let limits = event.rate_limits ?? event.payload?.rate_limits,
+                  let timestamp = parseTimestamp(event.timestamp) else {
+                continue
+            }
+
+            let snapshot = CodexRateLimitSnapshot(limits: limits, timestamp: timestamp, sourceCwd: sourceCwd)
+            if limits.isMainCodexLimit {
+                return snapshot
+            }
+
+            if fallbackSnapshot == nil {
+                fallbackSnapshot = snapshot
             }
         }
 
-        return nil
+        return fallbackSnapshot
     }
 
     private func sessionCwd(from file: URL) -> String? {
@@ -1914,7 +1935,53 @@ final class WidgetView: NSView {
         if sourceCheckCounter >= 4 {
             refreshNow(checkSignature: true)
         } else {
+            refreshIfSourceChanged()
+        }
+    }
+
+    private func refreshIfSourceChanged() {
+        guard !refreshInFlight else {
             needsDisplay = true
+            return
+        }
+
+        let currentSignature = sourceSignature
+        guard !currentSignature.isEmpty else {
+            refreshNow(checkSignature: true)
+            return
+        }
+
+        refreshInFlight = true
+        refreshQueue.async { [weak self] in
+            guard let self else {
+                return
+            }
+
+            let nextSignature = self.store.sourceSignature()
+            guard nextSignature != currentSignature else {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else {
+                        return
+                    }
+
+                    self.refreshInFlight = false
+                    self.needsDisplay = true
+                }
+                return
+            }
+
+            let nextData = self.store.load()
+
+            DispatchQueue.main.async { [weak self] in
+                guard let self else {
+                    return
+                }
+
+                self.creditData = nextData
+                self.sourceSignature = nextSignature
+                self.refreshInFlight = false
+                self.needsDisplay = true
+            }
         }
     }
 
