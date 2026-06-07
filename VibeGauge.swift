@@ -35,6 +35,13 @@ fileprivate struct ClaudeUsageAPICache: Codable {
     let refreshedAt: Date
 }
 
+private struct ClaudeBootstrapResult {
+    let organizationID: String?
+    let organizationIDs: [String]
+    let statusCode: Int?
+    let usedFallback: Bool
+}
+
 fileprivate struct ClaudeOAuthCredentials {
     var root: [String: Any]
     var oauth: [String: Any]
@@ -268,12 +275,11 @@ final class ClaudeRateLimitReader {
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
         let source = ClaudeDataSource.stored()
 
-        if source == .desktopSession,
-           let desktopSnapshot = desktopReader.loadSnapshot() {
-            return desktopSnapshot
+        if source == .desktopSession {
+            return desktopReader.loadSnapshot()
         }
 
-        if source == .desktopSession || source == .directAPI,
+        if source == .directAPI,
            let apiSnapshot = apiReader.loadSnapshot() {
             return apiSnapshot
         }
@@ -303,12 +309,14 @@ final class ClaudeRateLimitReader {
 
             var rows: [CreditRow] = []
 
-            if let current = firstLimit(in: limits, keys: ["current_session", "currentSession", "session", "five_hour", "fiveHour", "primary"]) {
-                rows.append(row(from: current, label: "5h"))
+            if let current = firstLimit(in: limits, keys: ["current_session", "currentSession", "session", "five_hour", "fiveHour", "primary"]),
+               let row = row(from: current, label: "5h") {
+                rows.append(row)
             }
 
-            if let weekly = firstLimit(in: limits, keys: ["weekly", "weekly_limits", "weeklyLimits", "all_models", "allModels", "seven_day", "sevenDay", "secondary"]) {
-                rows.append(row(from: weekly, label: "7d"))
+            if let weekly = firstLimit(in: limits, keys: ["weekly", "weekly_limits", "weeklyLimits", "all_models", "allModels", "seven_day", "sevenDay", "secondary"]),
+               let row = row(from: weekly, label: "7d") {
+                rows.append(row)
             }
 
             if !rows.isEmpty {
@@ -347,13 +355,16 @@ final class ClaudeRateLimitReader {
         return nil
     }
 
-    private func row(from limit: [String: Any], label: String) -> CreditRow {
+    private func row(from limit: [String: Any], label: String) -> CreditRow? {
         let percent = Int((number(in: limit, keys: ["used_percentage", "used_percent", "percent_used", "percentage", "used"]) ?? 0).rounded())
         let reset = resetDisplay(from: limit)
+        guard !reset.expired else {
+            return nil
+        }
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            percent: max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -522,6 +533,8 @@ final class ClaudeDesktopSessionUsageReader {
     private let safeStorageService = "Claude Safe Storage"
     private let safeStorageAccount = "Claude Key"
     private let cacheURL: URL
+    private var cachedSafeStorageKeyResult: (key: Data?, status: OSStatus)?
+    private var cachedActiveOrganizationID: (lastActiveOrg: String, result: ClaudeBootstrapResult, expiresAt: Date)?
 
     init(fileManager: FileManager = .default) {
         self.cacheURL = VibeGaugePaths.claudeUsageAPICache(fileManager: fileManager)
@@ -529,16 +542,61 @@ final class ClaudeDesktopSessionUsageReader {
 
     fileprivate func loadSnapshot() -> ClaudeRowsSnapshot? {
         guard let cookieJar = desktopCookies(),
-              let orgID = cookieJar["lastActiveOrg"],
-              !orgID.isEmpty,
-              let payload = fetchUsage(orgID: orgID, cookieHeader: cookieHeader(from: cookieJar)),
-              let rows = rows(from: payload) else {
+              let rows = firstUsageRows(from: cookieJar) else {
             return nil
         }
 
         let snapshot = ClaudeRowsSnapshot(rows: rows, modified: Date())
         writeCache(snapshot)
         return snapshot
+    }
+
+    func debugStatus() -> [String: Any] {
+        let keyResult = safeStorageKeyResult()
+        var status: [String: Any] = [
+            "cookies_file_exists": fileManager.fileExists(atPath: cookiesURL().path),
+            "safe_storage_key_available": keyResult.key != nil,
+            "safe_storage_status": keyResult.status,
+        ]
+
+        guard let cookieJar = desktopCookies() else {
+            status["cookies_readable"] = false
+            return status
+        }
+
+        status["cookies_readable"] = true
+        status["cookie_names"] = Array(cookieJar.keys).sorted()
+        status["has_session_key"] = cookieJar["sessionKey"] != nil
+        status["has_last_active_org"] = cookieJar["lastActiveOrg"] != nil
+        let bootstrap = activeOrganization(from: cookieJar)
+        let orgID = bootstrap?.organizationID
+        status["bootstrap_active_org_available"] = orgID != nil
+        status["bootstrap_status"] = bootstrap?.statusCode as Any
+        status["bootstrap_used_fallback"] = bootstrap?.usedFallback as Any
+        status["bootstrap_org_count"] = bootstrap?.organizationIDs.count ?? 0
+        if let bootstrap, let orgID {
+            status["bootstrap_active_org_index"] = bootstrap.organizationIDs.firstIndex(of: orgID) as Any
+        }
+
+        guard let orgID, !orgID.isEmpty else {
+            return status
+        }
+
+        let probe = fetchUsageProbe(orgID: orgID, cookieJar: cookieJar)
+        status["http_status"] = probe.statusCode
+        status["json_keys"] = probe.keys
+        status["json_types"] = probe.types
+        status["has_five_hour"] = probe.keys.contains("five_hour")
+        status["has_seven_day"] = probe.keys.contains("seven_day")
+        status["five_hour_keys"] = probe.fiveHourKeys
+        status["seven_day_keys"] = probe.sevenDayKeys
+        status["five_hour_types"] = probe.fiveHourTypes
+        status["seven_day_types"] = probe.sevenDayTypes
+        status["five_hour_usage"] = probe.fiveHourUsage
+        status["seven_day_usage"] = probe.sevenDayUsage
+        status["error"] = probe.error
+        status["organization_usage_candidates"] = usageCandidatesDebug(from: cookieJar, bootstrap: bootstrap)
+        return status
     }
 
     func sourceSignature() -> String {
@@ -616,6 +674,14 @@ final class ClaudeDesktopSessionUsageReader {
     }
 
     private func safeStorageKey() -> Data? {
+        safeStorageKeyResult().key
+    }
+
+    private func safeStorageKeyResult() -> (key: Data?, status: OSStatus) {
+        if let cachedSafeStorageKeyResult {
+            return cachedSafeStorageKeyResult
+        }
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: safeStorageService,
@@ -625,11 +691,21 @@ final class ClaudeDesktopSessionUsageReader {
         ]
 
         var item: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
-              let password = item as? Data else {
-            return nil
+        let copyStatus = SecItemCopyMatching(query as CFDictionary, &item)
+        let password: Data
+        guard copyStatus == errSecSuccess, let itemData = item as? Data else {
+            let result: (key: Data?, status: OSStatus) = (nil, copyStatus)
+            cachedSafeStorageKeyResult = result
+            return result
         }
+        password = itemData
 
+        let result = deriveSafeStorageKey(from: password)
+        cachedSafeStorageKeyResult = result
+        return result
+    }
+
+    private func deriveSafeStorageKey(from password: Data) -> (key: Data?, status: OSStatus) {
         let salt = Data("saltysalt".utf8)
         var key = Data(repeating: 0, count: kCCKeySizeAES128)
         let keyLength = key.count
@@ -651,7 +727,38 @@ final class ClaudeDesktopSessionUsageReader {
             }
         }
 
-        return status == kCCSuccess ? key : nil
+        return status == kCCSuccess ? (key, status) : (nil, status)
+    }
+
+    private func safeStoragePasswordFromSecurityCommand() -> Data? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = [
+            "find-generic-password",
+            "-s", safeStorageService,
+            "-a", safeStorageAccount,
+            "-w",
+        ]
+
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = Pipe()
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                return nil
+            }
+
+            var data = output.fileHandleForReading.readDataToEndOfFile()
+            if data.last == 0x0a {
+                data.removeLast()
+            }
+            return data.isEmpty ? nil : data
+        } catch {
+            return nil
+        }
     }
 
     private func decryptCookie(_ data: Data, key: Data) -> String? {
@@ -698,10 +805,18 @@ final class ClaudeDesktopSessionUsageReader {
         }
 
         output.removeSubrange(outputLength..<output.count)
-        return String(data: output, encoding: .utf8)
+        if let value = String(data: output, encoding: .utf8) {
+            return value
+        }
+
+        if output.count > 32 {
+            return String(data: output.dropFirst(32), encoding: .utf8)
+        }
+
+        return nil
     }
 
-    private func fetchUsage(orgID: String, cookieHeader: String) -> [String: Any]? {
+    private func fetchUsage(orgID: String, cookieJar: [String: String]) -> [String: Any]? {
         guard let url = URL(string: "https://claude.ai/api/organizations/\(orgID)/usage") else {
             return nil
         }
@@ -709,12 +824,7 @@ final class ClaudeDesktopSessionUsageReader {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 10
-        request.setValue(cookieHeader, forHTTPHeaderField: "Cookie")
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-        request.setValue("https://claude.ai", forHTTPHeaderField: "Origin")
-        request.setValue("https://claude.ai/settings/usage", forHTTPHeaderField: "Referer")
-        request.setValue("VibeGauge/1.0", forHTTPHeaderField: "User-Agent")
-
+        applyClaudeHeaders(to: &request, cookieJar: cookieJar, orgID: orgID, referer: "https://claude.ai/settings/usage")
         let semaphore = DispatchSemaphore(value: 0)
         var result: [String: Any]?
 
@@ -732,6 +842,299 @@ final class ClaudeDesktopSessionUsageReader {
         }.resume()
 
         _ = semaphore.wait(timeout: .now() + 11)
+        return result
+    }
+
+    private func applyClaudeHeaders(to request: inout URLRequest, cookieJar: [String: String], orgID: String?, referer: String) {
+        request.setValue(cookieHeader(from: cookieJar), forHTTPHeaderField: "Cookie")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("https://claude.ai", forHTTPHeaderField: "Origin")
+        request.setValue(referer, forHTTPHeaderField: "Referer")
+        request.setValue(browserUserAgent, forHTTPHeaderField: "User-Agent")
+        if let deviceID = cookieJar["anthropic-device-id"], !deviceID.isEmpty {
+            request.setValue(deviceID, forHTTPHeaderField: "anthropic-device-id")
+        }
+        if let orgID, !orgID.isEmpty {
+            request.setValue(orgID, forHTTPHeaderField: "x-organization-uuid")
+        }
+    }
+
+    private func firstUsageRows(from cookieJar: [String: String]) -> [CreditRow]? {
+        guard let bootstrap = activeOrganization(from: cookieJar) else {
+            return nil
+        }
+
+        for orgID in candidateOrganizationIDs(from: bootstrap) {
+            guard let payload = fetchUsage(orgID: orgID, cookieJar: cookieJar),
+                  let rows = rows(from: payload) else {
+                continue
+            }
+
+            return rows
+        }
+
+        return nil
+    }
+
+    private func activeOrganizationID(from cookieJar: [String: String]) -> String? {
+        activeOrganization(from: cookieJar)?.organizationID
+    }
+
+    private func candidateOrganizationIDs(from bootstrap: ClaudeBootstrapResult) -> [String] {
+        var ids: [String] = []
+
+        if let organizationID = bootstrap.organizationID, !organizationID.isEmpty {
+            ids.append(organizationID)
+        }
+
+        for organizationID in bootstrap.organizationIDs where !organizationID.isEmpty && !ids.contains(organizationID) {
+            ids.append(organizationID)
+        }
+
+        return ids
+    }
+
+    private func activeOrganization(from cookieJar: [String: String]) -> ClaudeBootstrapResult? {
+        guard let lastActiveOrg = cookieJar["lastActiveOrg"], !lastActiveOrg.isEmpty else {
+            return nil
+        }
+
+        if let cachedActiveOrganizationID,
+           cachedActiveOrganizationID.lastActiveOrg == lastActiveOrg,
+           cachedActiveOrganizationID.expiresAt > Date() {
+            return cachedActiveOrganizationID.result
+        }
+
+        let bootstrap = fetchBootstrapActiveOrganization(lastActiveOrg: lastActiveOrg, cookieJar: cookieJar)
+        let result: ClaudeBootstrapResult
+        if let organizationID = bootstrap.organizationID, !organizationID.isEmpty {
+            result = bootstrap
+        } else {
+            result = ClaudeBootstrapResult(
+                organizationID: lastActiveOrg,
+                organizationIDs: [lastActiveOrg],
+                statusCode: bootstrap.statusCode,
+                usedFallback: bootstrap.usedFallback
+            )
+        }
+
+        cachedActiveOrganizationID = (lastActiveOrg, result, Date().addingTimeInterval(300))
+        return result
+    }
+
+    private func fetchBootstrapActiveOrganization(lastActiveOrg: String, cookieJar: [String: String]) -> ClaudeBootstrapResult {
+        guard let encodedOrg = lastActiveOrg.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed),
+              let primaryURL = URL(string: "https://claude.ai/edge-api/bootstrap/\(encodedOrg)/app_start?statsig_hashing_algorithm=djb2&growthbook_format=sdk&include_system_prompts=false"),
+              let fallbackURL = URL(string: "https://claude.ai/edge-api/bootstrap?statsig_hashing_algorithm=djb2&growthbook_format=sdk&include_system_prompts=false") else {
+            return ClaudeBootstrapResult(organizationID: nil, organizationIDs: [], statusCode: nil, usedFallback: false)
+        }
+
+        let primary = fetchBootstrap(url: primaryURL, cookieJar: cookieJar, orgID: lastActiveOrg)
+        if primary.statusCode == 404 || primary.statusCode == 403 {
+            let fallback = fetchBootstrap(url: fallbackURL, cookieJar: cookieJar, orgID: nil)
+            return ClaudeBootstrapResult(
+                organizationID: fallback.organizationID,
+                organizationIDs: fallback.organizationIDs,
+                statusCode: fallback.statusCode,
+                usedFallback: true
+            )
+        }
+
+        return ClaudeBootstrapResult(
+            organizationID: primary.organizationID,
+            organizationIDs: primary.organizationIDs,
+            statusCode: primary.statusCode,
+            usedFallback: false
+        )
+    }
+
+    private func fetchBootstrap(url: URL, cookieJar: [String: String], orgID: String?) -> (organizationID: String?, organizationIDs: [String], statusCode: Int?) {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 6
+        applyClaudeHeaders(to: &request, cookieJar: cookieJar, orgID: orgID, referer: "https://claude.ai/")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var result: String?
+        var organizationIDs: [String] = []
+        var statusCode: Int?
+
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            defer { semaphore.signal() }
+
+            guard let http = response as? HTTPURLResponse else {
+                return
+            }
+
+            statusCode = http.statusCode
+            guard http.statusCode == 200,
+                  let data,
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return
+            }
+
+            result = self.organizationID(in: object)
+            organizationIDs = self.organizationIDs(in: object)
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 7)
+        return (result, organizationIDs, statusCode)
+    }
+
+    private func organizationID(in object: [String: Any]) -> String? {
+        if let active = object["active_organization"] as? [String: Any],
+           let uuid = active["uuid"] as? String,
+           !uuid.isEmpty {
+            return uuid
+        }
+
+        if let active = object["activeOrganization"] as? [String: Any],
+           let uuid = active["uuid"] as? String,
+           !uuid.isEmpty {
+            return uuid
+        }
+
+        if let organization = object["organization"] as? [String: Any],
+           let uuid = organization["uuid"] as? String,
+           !uuid.isEmpty {
+            return uuid
+        }
+
+        if let organizations = object["organizations"] as? [[String: Any]] {
+            for organization in organizations {
+                if let isActive = organization["is_active"] as? Bool,
+                   isActive,
+                   let uuid = organization["uuid"] as? String,
+                   !uuid.isEmpty {
+                    return uuid
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func organizationIDs(in object: [String: Any]) -> [String] {
+        var ids: [String] = []
+
+        func append(_ value: Any?) {
+            guard let uuid = value as? String, !uuid.isEmpty, !ids.contains(uuid) else {
+                return
+            }
+            ids.append(uuid)
+        }
+
+        append((object["active_organization"] as? [String: Any])?["uuid"])
+        append((object["activeOrganization"] as? [String: Any])?["uuid"])
+        append((object["organization"] as? [String: Any])?["uuid"])
+
+        if let organizations = object["organizations"] as? [[String: Any]] {
+            for organization in organizations {
+                append(organization["uuid"])
+            }
+        }
+
+        return ids
+    }
+
+    private func usageCandidatesDebug(from cookieJar: [String: String], bootstrap: ClaudeBootstrapResult?) -> [[String: Any]] {
+        guard let bootstrap else {
+            return []
+        }
+
+        let activeID = bootstrap.organizationID
+        return candidateOrganizationIDs(from: bootstrap).prefix(8).enumerated().map { index, orgID in
+            let probe = fetchUsageProbe(orgID: orgID, cookieJar: cookieJar)
+            return [
+                "index": index,
+                "is_selected": orgID == activeID,
+                "status": probe.statusCode as Any,
+                "five_hour_usage": probe.fiveHourUsage,
+                "seven_day_usage": probe.sevenDayUsage,
+                "error": probe.error as Any,
+            ]
+        }
+    }
+
+    private func fetchUsageProbe(orgID: String, cookieJar: [String: String]) -> (statusCode: Int?, keys: [String], types: [String: String], fiveHourKeys: [String], sevenDayKeys: [String], fiveHourTypes: [String: String], sevenDayTypes: [String: String], fiveHourUsage: [String: Any], sevenDayUsage: [String: Any], error: String?) {
+        guard let url = URL(string: "https://claude.ai/api/organizations/\(orgID)/usage") else {
+            return (nil, [], [:], [], [], [:], [:], [:], [:], "invalid_url")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10
+        applyClaudeHeaders(to: &request, cookieJar: cookieJar, orgID: orgID, referer: "https://claude.ai/settings/usage")
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var statusCode: Int?
+        var keys: [String] = []
+        var types: [String: String] = [:]
+        var fiveHourKeys: [String] = []
+        var sevenDayKeys: [String] = []
+        var fiveHourTypes: [String: String] = [:]
+        var sevenDayTypes: [String: String] = [:]
+        var fiveHourUsage: [String: Any] = [:]
+        var sevenDayUsage: [String: Any] = [:]
+        var error: String?
+
+        URLSession.shared.dataTask(with: request) { data, response, requestError in
+            defer { semaphore.signal() }
+
+            if let requestError {
+                error = requestError.localizedDescription
+                return
+            }
+
+            statusCode = (response as? HTTPURLResponse)?.statusCode
+            if let data,
+                let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                keys = Array(object.keys).sorted()
+                types = self.typeMap(object)
+                if let fiveHour = object["five_hour"] as? [String: Any] {
+                    fiveHourKeys = Array(fiveHour.keys).sorted()
+                    fiveHourTypes = self.typeMap(fiveHour)
+                    fiveHourUsage = self.usageDebugMap(fiveHour)
+                }
+                if let sevenDay = object["seven_day"] as? [String: Any] {
+                    sevenDayKeys = Array(sevenDay.keys).sorted()
+                    sevenDayTypes = self.typeMap(sevenDay)
+                    sevenDayUsage = self.usageDebugMap(sevenDay)
+                }
+            }
+        }.resume()
+
+        _ = semaphore.wait(timeout: .now() + 11)
+        return (statusCode, keys, types, fiveHourKeys, sevenDayKeys, fiveHourTypes, sevenDayTypes, fiveHourUsage, sevenDayUsage, error)
+    }
+
+    private func usageDebugMap(_ object: [String: Any]) -> [String: Any] {
+        [
+            "utilization": number(object["utilization"]) as Any,
+            "resets_at_is_null": object["resets_at"] is NSNull,
+            "resets_at_type": String(describing: type(of: object["resets_at"])),
+        ]
+    }
+
+    private func typeMap(_ object: [String: Any]) -> [String: String] {
+        var result: [String: String] = [:]
+        for key in object.keys.sorted() {
+            let value = object[key]
+            switch value {
+            case is [String: Any]:
+                result[key] = "object"
+            case is [Any]:
+                result[key] = "array"
+            case is NSNumber:
+                result[key] = "number"
+            case is String:
+                result[key] = "string"
+            case is NSNull:
+                result[key] = "null"
+            default:
+                result[key] = String(describing: type(of: value))
+            }
+        }
         return result
     }
 
@@ -756,7 +1159,7 @@ final class ClaudeDesktopSessionUsageReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(Int(percentValue.rounded()), 100)),
+            percent: max(0, min(Int(percentValue.rounded()), 100)),
             remaining: reset.remaining
         )
     }
@@ -802,6 +1205,10 @@ final class ClaudeDesktopSessionUsageReader {
 
     private func chromeTimestamp(for date: Date) -> Int64 {
         Int64((date.timeIntervalSince1970 + 11_644_473_600) * 1_000_000)
+    }
+
+    private var browserUserAgent: String {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
     }
 
     private func number(_ value: Any?) -> Double? {
@@ -1091,7 +1498,8 @@ final class ClaudeUsageAPIReader {
         let cacheURL = VibeGaugePaths.claudeUsageAPICache(fileManager: fileManager)
         guard let data = try? Data(contentsOf: cacheURL),
               let cache = try? JSONDecoder().decode(ClaudeUsageAPICache.self, from: data),
-              !cache.rows.isEmpty else {
+              !cache.rows.isEmpty,
+              cache.rows.contains(where: isUsableRow) else {
             return nil
         }
 
@@ -1119,7 +1527,15 @@ final class ClaudeUsageAPIReader {
             rows.append(row(from: sevenDay, label: "7d"))
         }
 
-        return rows.isEmpty ? nil : rows
+        guard !rows.isEmpty, rows.contains(where: isUsableRow) else {
+            return nil
+        }
+
+        return rows
+    }
+
+    private func isUsableRow(_ row: CreditRow) -> Bool {
+        row.percent > 0 || row.remaining != "no reset"
     }
 
     private func row(from limit: [String: Any], label: String) -> CreditRow {
@@ -1129,7 +1545,7 @@ final class ClaudeUsageAPIReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(Int(percentValue.rounded()), 100)),
+            percent: max(0, min(Int(percentValue.rounded()), 100)),
             remaining: reset.remaining
         )
     }
@@ -1366,7 +1782,7 @@ final class ClaudeUsageCacheReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            percent: max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -1460,6 +1876,12 @@ private struct CodexLimit: Decodable {
 
 private struct CodexRateLimitSnapshot {
     let limits: CodexRateLimits
+    let timestamp: Date
+    let sourceCwd: String?
+}
+
+private struct CodexLimitCandidate {
+    let limit: CodexLimit
     let timestamp: Date
     let sourceCwd: String?
 }
@@ -1568,7 +1990,10 @@ final class CodexRateLimitReader {
 
         let text = String(decoding: data, as: UTF8.self)
         let sourceCwd = sessionCwd(from: file)
-        var fallbackSnapshot: CodexRateLimitSnapshot?
+        var mainPrimary: CodexLimitCandidate?
+        var mainSecondary: CodexLimitCandidate?
+        var fallbackPrimary: CodexLimitCandidate?
+        var fallbackSecondary: CodexLimitCandidate?
 
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
             guard let eventData = String(line).data(using: .utf8),
@@ -1578,17 +2003,48 @@ final class CodexRateLimitReader {
                 continue
             }
 
-            let snapshot = CodexRateLimitSnapshot(limits: limits, timestamp: timestamp, sourceCwd: sourceCwd)
             if limits.isMainCodexLimit {
-                return snapshot
-            }
+                if mainPrimary == nil, let primary = limits.primary {
+                    mainPrimary = CodexLimitCandidate(limit: primary, timestamp: timestamp, sourceCwd: sourceCwd)
+                }
+                if mainSecondary == nil, let secondary = limits.secondary {
+                    mainSecondary = CodexLimitCandidate(limit: secondary, timestamp: timestamp, sourceCwd: sourceCwd)
+                }
 
-            if fallbackSnapshot == nil {
-                fallbackSnapshot = snapshot
+                if mainPrimary != nil && mainSecondary != nil {
+                    break
+                }
+            } else {
+                if fallbackPrimary == nil, let primary = limits.primary {
+                    fallbackPrimary = CodexLimitCandidate(limit: primary, timestamp: timestamp, sourceCwd: sourceCwd)
+                }
+                if fallbackSecondary == nil, let secondary = limits.secondary {
+                    fallbackSecondary = CodexLimitCandidate(limit: secondary, timestamp: timestamp, sourceCwd: sourceCwd)
+                }
             }
         }
 
-        return fallbackSnapshot
+        let primary = mainPrimary ?? fallbackPrimary
+        let secondary = mainSecondary ?? fallbackSecondary
+        guard primary != nil || secondary != nil else {
+            return nil
+        }
+
+        let timestamp = [primary?.timestamp, secondary?.timestamp]
+            .compactMap { $0 }
+            .max() ?? .distantPast
+        let merged = CodexRateLimits(
+            limit_id: mainPrimary != nil || mainSecondary != nil ? "codex" : nil,
+            limit_name: nil,
+            primary: primary?.limit,
+            secondary: secondary?.limit
+        )
+
+        return CodexRateLimitSnapshot(
+            limits: merged,
+            timestamp: timestamp,
+            sourceCwd: primary?.sourceCwd ?? secondary?.sourceCwd
+        )
     }
 
     private func sessionCwd(from file: URL) -> String? {
@@ -1667,7 +2123,7 @@ final class CodexRateLimitReader {
 
         return CreditRow(
             label: label,
-            percent: reset.expired ? 0 : max(0, min(percent, 100)),
+            percent: max(0, min(percent, 100)),
             remaining: reset.remaining
         )
     }
@@ -2736,6 +3192,15 @@ if CommandLine.arguments.contains("--debug-data") {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
     if let data = try? encoder.encode(CreditStore().load()),
+       let text = String(data: data, encoding: .utf8) {
+        print(text)
+    }
+    exit(0)
+}
+
+if CommandLine.arguments.contains("--debug-claude-session") {
+    let status = ClaudeDesktopSessionUsageReader().debugStatus()
+    if let data = try? JSONSerialization.data(withJSONObject: status, options: [.prettyPrinted, .sortedKeys]),
        let text = String(data: data, encoding: .utf8) {
         print(text)
     }

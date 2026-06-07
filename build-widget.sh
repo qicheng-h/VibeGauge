@@ -38,4 +38,6 @@ cp "${ICON_FILE}" "${RESOURCES_DIR}/${ICON_FILE}"
 /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "${CONTENTS_DIR}/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSHighResolutionCapable bool true" "${CONTENTS_DIR}/Info.plist"
 
+codesign --force --sign - --identifier app.vibegauge.widget "${APP_DIR}"
+
 echo "Built ${APP_DIR}"
