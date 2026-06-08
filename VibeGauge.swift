@@ -18,6 +18,7 @@ struct CreditRow: Codable {
     var label: String
     var percent: Int
     var remaining: String
+    var severityPercent: Int? = nil
 }
 
 private struct ResetDisplay {
@@ -128,6 +129,7 @@ final class CreditStore {
     func sourceSignature() -> String {
         [
             claudeReader.sourceSignature(),
+            codexReader.sourceSignature(),
             newestSignature(in: fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/sessions")),
             newestSignature(in: fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/archived_sessions")),
         ].joined(separator: "|")
@@ -1862,10 +1864,6 @@ private struct CodexRateLimits: Decodable {
     let limit_name: String?
     let primary: CodexLimit?
     let secondary: CodexLimit?
-
-    var isMainCodexLimit: Bool {
-        limit_id == nil || limit_id == "codex"
-    }
 }
 
 private struct CodexLimit: Decodable {
@@ -1874,14 +1872,32 @@ private struct CodexLimit: Decodable {
     let resets_at: TimeInterval?
 }
 
-private struct CodexRateLimitSnapshot {
-    let limits: CodexRateLimits
-    let timestamp: Date
-    let sourceCwd: String?
+private struct CodexAuthFile: Decodable {
+    let tokens: CodexAuthTokens?
 }
 
-private struct CodexLimitCandidate {
-    let limit: CodexLimit
+private struct CodexAuthTokens: Decodable {
+    let access_token: String?
+}
+
+private struct CodexUsageResponse: Decodable {
+    let rate_limit: CodexUsageRateLimit?
+}
+
+private struct CodexUsageRateLimit: Decodable {
+    let primary_window: CodexUsageWindow?
+    let secondary_window: CodexUsageWindow?
+}
+
+private struct CodexUsageWindow: Decodable {
+    let used_percent: Double?
+    let limit_window_seconds: Int?
+    let reset_after_seconds: TimeInterval?
+    let reset_at: TimeInterval?
+}
+
+private struct CodexRateLimitSnapshot {
+    let limits: CodexRateLimits
     let timestamp: Date
     let sourceCwd: String?
 }
@@ -1894,6 +1910,7 @@ fileprivate struct CodexRowsSnapshot {
 final class CodexRateLimitReader {
     private let decoder = JSONDecoder()
     private let fileManager = FileManager.default
+    private let usageURL = URL(string: "https://chatgpt.com/backend-api/wham/usage")!
     private let fractionalDateFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -1903,13 +1920,30 @@ final class CodexRateLimitReader {
     private var cachedSignature: String?
     private var cachedSnapshot: CodexRateLimitSnapshot?
 
+    fileprivate func sourceSignature() -> String {
+        let authURL = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        let authSignature = fileSignature(authURL)
+        let refreshBucket = Int(Date().timeIntervalSince1970 / 120)
+        return "codex-api:\(authSignature):\(refreshBucket)"
+    }
+
+    private func fileSignature(_ url: URL) -> String {
+        guard let values = try? url.resourceValues(forKeys: [.contentModificationDateKey, .fileSizeKey]) else {
+            return "\(url.path):missing"
+        }
+
+        let modified = values.contentModificationDate?.timeIntervalSince1970 ?? 0
+        let size = values.fileSize ?? 0
+        return "\(url.path):\(modified):\(size)"
+    }
+
     fileprivate func loadSnapshot(signature: String) -> CodexRowsSnapshot? {
         let snapshot: CodexRateLimitSnapshot?
 
         if cachedSignature == signature {
             snapshot = cachedSnapshot
         } else {
-            snapshot = latestRateLimits()
+            snapshot = latestUsageFromAPI() ?? latestRateLimits()
             cachedSnapshot = snapshot
             cachedSignature = signature
         }
@@ -1931,6 +1965,77 @@ final class CodexRateLimitReader {
         return rows.isEmpty ? nil : CodexRowsSnapshot(rows: rows, modified: snapshot.timestamp)
     }
 
+    private func latestUsageFromAPI() -> CodexRateLimitSnapshot? {
+        guard let accessToken = codexAccessToken(), !accessToken.isEmpty else {
+            return nil
+        }
+
+        var request = URLRequest(url: usageURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 12
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("VibeGauge", forHTTPHeaderField: "User-Agent")
+
+        var responseData: Data?
+        var responseError: Error?
+        var statusCode: Int?
+        let semaphore = DispatchSemaphore(value: 0)
+
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            responseData = data
+            responseError = error
+            statusCode = (response as? HTTPURLResponse)?.statusCode
+            semaphore.signal()
+        }.resume()
+
+        guard semaphore.wait(timeout: .now() + 15) == .success,
+              responseError == nil,
+              statusCode == 200,
+              let responseData,
+              let usage = try? decoder.decode(CodexUsageResponse.self, from: responseData),
+              let rateLimit = usage.rate_limit else {
+            return nil
+        }
+
+        let snapshot = CodexRateLimits(
+            limit_id: "codex-api",
+            limit_name: nil,
+            primary: codexLimit(from: rateLimit.primary_window),
+            secondary: codexLimit(from: rateLimit.secondary_window)
+        )
+
+        guard snapshot.primary != nil || snapshot.secondary != nil else {
+            return nil
+        }
+
+        return CodexRateLimitSnapshot(limits: snapshot, timestamp: Date(), sourceCwd: nil)
+    }
+
+    private func codexAccessToken() -> String? {
+        let authURL = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".codex/auth.json")
+        guard let data = try? Data(contentsOf: authURL),
+              let auth = try? decoder.decode(CodexAuthFile.self, from: data) else {
+            return nil
+        }
+
+        return auth.tokens?.access_token
+    }
+
+    private func codexLimit(from window: CodexUsageWindow?) -> CodexLimit? {
+        guard let window else {
+            return nil
+        }
+
+        let windowMinutes = window.limit_window_seconds.map { Int(($0 + 59) / 60) }
+        let resetAt = window.reset_at ?? window.reset_after_seconds.map { Date().timeIntervalSince1970 + $0 }
+        return CodexLimit(
+            used_percent: window.used_percent,
+            window_minutes: windowMinutes,
+            resets_at: resetAt
+        )
+    }
+
     private func latestRateLimits() -> CodexRateLimitSnapshot? {
         let home = fileManager.homeDirectoryForCurrentUser
         let roots = [
@@ -1939,23 +2044,18 @@ final class CodexRateLimitReader {
         ]
 
         var latestSnapshot: CodexRateLimitSnapshot?
-        var latestFallbackSnapshot: CodexRateLimitSnapshot?
 
         for file in recentJSONLFiles(roots: roots) {
             guard let snapshot = latestRateLimits(in: file) else {
                 continue
             }
 
-            if snapshot.limits.isMainCodexLimit {
-                if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
-                    latestSnapshot = snapshot
-                }
-            } else if latestFallbackSnapshot == nil || snapshot.timestamp > latestFallbackSnapshot!.timestamp {
-                latestFallbackSnapshot = snapshot
+            if latestSnapshot == nil || snapshot.timestamp > latestSnapshot!.timestamp {
+                latestSnapshot = snapshot
             }
         }
 
-        return latestSnapshot ?? latestFallbackSnapshot
+        return latestSnapshot
     }
 
     private func recentJSONLFiles(roots: [URL]) -> [URL] {
@@ -1990,11 +2090,6 @@ final class CodexRateLimitReader {
 
         let text = String(decoding: data, as: UTF8.self)
         let sourceCwd = sessionCwd(from: file)
-        var mainPrimary: CodexLimitCandidate?
-        var mainSecondary: CodexLimitCandidate?
-        var fallbackPrimary: CodexLimitCandidate?
-        var fallbackSecondary: CodexLimitCandidate?
-
         for line in text.split(separator: "\n").reversed() where line.contains("\"rate_limits\"") {
             guard let eventData = String(line).data(using: .utf8),
                   let event = try? decoder.decode(CodexLogEvent.self, from: eventData),
@@ -2003,48 +2098,24 @@ final class CodexRateLimitReader {
                 continue
             }
 
-            if limits.isMainCodexLimit {
-                if mainPrimary == nil, let primary = limits.primary {
-                    mainPrimary = CodexLimitCandidate(limit: primary, timestamp: timestamp, sourceCwd: sourceCwd)
-                }
-                if mainSecondary == nil, let secondary = limits.secondary {
-                    mainSecondary = CodexLimitCandidate(limit: secondary, timestamp: timestamp, sourceCwd: sourceCwd)
-                }
-
-                if mainPrimary != nil && mainSecondary != nil {
-                    break
-                }
-            } else {
-                if fallbackPrimary == nil, let primary = limits.primary {
-                    fallbackPrimary = CodexLimitCandidate(limit: primary, timestamp: timestamp, sourceCwd: sourceCwd)
-                }
-                if fallbackSecondary == nil, let secondary = limits.secondary {
-                    fallbackSecondary = CodexLimitCandidate(limit: secondary, timestamp: timestamp, sourceCwd: sourceCwd)
-                }
+            guard hasUsageWindow(limits) else {
+                continue
             }
+
+            return CodexRateLimitSnapshot(
+                limits: limits,
+                timestamp: timestamp,
+                sourceCwd: sourceCwd
+            )
         }
 
-        let primary = mainPrimary ?? fallbackPrimary
-        let secondary = mainSecondary ?? fallbackSecondary
-        guard primary != nil || secondary != nil else {
-            return nil
-        }
+        return nil
+    }
 
-        let timestamp = [primary?.timestamp, secondary?.timestamp]
-            .compactMap { $0 }
-            .max() ?? .distantPast
-        let merged = CodexRateLimits(
-            limit_id: mainPrimary != nil || mainSecondary != nil ? "codex" : nil,
-            limit_name: nil,
-            primary: primary?.limit,
-            secondary: secondary?.limit
-        )
-
-        return CodexRateLimitSnapshot(
-            limits: merged,
-            timestamp: timestamp,
-            sourceCwd: primary?.sourceCwd ?? secondary?.sourceCwd
-        )
+    private func hasUsageWindow(_ limits: CodexRateLimits) -> Bool {
+        [limits.primary, limits.secondary]
+            .compactMap { $0?.window_minutes }
+            .contains { $0 == 300 || $0 == 10_080 }
     }
 
     private func sessionCwd(from file: URL) -> String? {
@@ -2118,13 +2189,14 @@ final class CodexRateLimitReader {
             label = fallbackLabel
         }
 
-        let percent = Int((limit.used_percent ?? 0).rounded())
+        let usedPercent = max(0, min(Int((limit.used_percent ?? 0).rounded()), 100))
         let reset = resetDisplay(until: limit.resets_at)
 
         return CreditRow(
             label: label,
-            percent: max(0, min(percent, 100)),
-            remaining: reset.remaining
+            percent: usedPercent,
+            remaining: reset.remaining,
+            severityPercent: usedPercent
         )
     }
 
@@ -2964,9 +3036,10 @@ final class WidgetView: NSView {
         let barX = rect.minX + labelWidth + gap
         let barWidth = progressBarWidth(in: rect)
         drawText(row.label, at: NSPoint(x: rect.minX, y: y - 4), attrs: attrs(size: 10.4, weight: .semibold, color: tokens.faint, mono: false))
-        drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(row.percent, tokens: tokens), track: tokens.track, radius: radius)
+        let severityPercent = row.severityPercent ?? row.percent
+        drawProgress(percent: row.percent, in: NSRect(x: barX, y: y, width: barWidth, height: height), fill: fillColor(severityPercent, tokens: tokens), track: tokens.track, radius: radius)
         let percent = showPercentSymbol ? "\(row.percent)%" : "\(row.percent)"
-        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 10.8, weight: .bold, color: warningColor(for: row.percent, tokens: tokens, terminal: false) ?? tokens.text, mono: false))
+        drawRight(percent, x: barX + barWidth + gap + percentWidth, y: y - 5, width: percentWidth, attrs: attrs(size: 10.8, weight: .bold, color: warningColor(for: severityPercent, tokens: tokens, terminal: false) ?? tokens.text, mono: false))
         drawRight(row.remaining, x: rect.maxX, y: y - 5, width: resetWidth, attrs: attrs(size: 9.8, weight: .regular, color: tokens.muted, mono: false))
     }
 
@@ -2975,8 +3048,9 @@ final class WidgetView: NSView {
         let barWidth = progressBarWidth(in: rect)
         let percentRight = barX + barWidth + columnGap + percentColumnWidth
         drawText(row.label, at: NSPoint(x: rect.minX, y: y), attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
-        drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(row.percent, tokens: tokens), empty: tokens.track)
-        drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: warningColor(for: row.percent, tokens: tokens, terminal: false) ?? tokens.text, mono: true))
+        let severityPercent = row.severityPercent ?? row.percent
+        drawSegmentBar(percent: row.percent, in: NSRect(x: barX, y: y + 1, width: barWidth, height: 10), count: max(12, Int(barWidth / 5.6)), fill: fillColor(severityPercent, tokens: tokens), empty: tokens.track)
+        drawRight("\(row.percent)%", x: percentRight, y: y, width: percentColumnWidth, attrs: attrs(size: 10.6, weight: .bold, color: warningColor(for: severityPercent, tokens: tokens, terminal: false) ?? tokens.text, mono: true))
         drawRight(row.remaining, x: rect.maxX, y: y, width: resetColumnWidth, attrs: attrs(size: 10.6, weight: .regular, color: tokens.muted, mono: true))
     }
 
@@ -2986,12 +3060,13 @@ final class WidgetView: NSView {
         drawText(row.label, at: NSPoint(x: rect.minX, y: y - 1), attrs: attrs(size: 10.4, weight: .regular, color: tokens.termFaint, mono: true))
         let bar = NSRect(x: barX, y: y, width: barWidth, height: 8)
         drawDottedTrack(in: bar, tokens: tokens)
-        let fill = fillColor(row.percent, tokens: tokens)
+        let severityPercent = row.severityPercent ?? row.percent
+        let fill = fillColor(severityPercent, tokens: tokens)
         fill.setFill()
         NSBezierPath(rect: NSRect(x: bar.minX, y: bar.minY, width: bar.width * CGFloat(row.percent) / 100, height: bar.height)).fill()
         tokens.termBorder.setStroke()
         NSBezierPath(rect: bar).stroke()
-        drawRight("\(row.percent)%", x: bar.maxX + columnGap + percentColumnWidth, y: y - 2, width: percentColumnWidth, attrs: attrs(size: 10.4, weight: .bold, color: warningColor(for: row.percent, tokens: tokens, terminal: true) ?? tokens.termText, mono: true))
+        drawRight("\(row.percent)%", x: bar.maxX + columnGap + percentColumnWidth, y: y - 2, width: percentColumnWidth, attrs: attrs(size: 10.4, weight: .bold, color: warningColor(for: severityPercent, tokens: tokens, terminal: true) ?? tokens.termText, mono: true))
         drawRight(row.remaining, x: rect.maxX, y: y - 2, width: resetColumnWidth, attrs: attrs(size: 10.4, weight: .regular, color: tokens.termDim, mono: true))
     }
 
